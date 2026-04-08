@@ -134,6 +134,7 @@ Rules:
 - Ignore all [OOC] conversation/interaction — only record in-character content.
 - Do NOT add info already in the character card/persona or already in the lorebook.
 - Each entry = ONE specific thing (one event, one character change, one relationship shift, etc.)
+- Do NOT duplicate the same information across different categories. If something happened as an event, record it ONLY as an event — do not also create a separate character or relationship entry with the same info rephrased. Pick the single most fitting category.
 - Content: 2-5 sentences per entry. Preserve ALL details including violence, trauma, sensitive/adult content. Do NOT censor.
 - Output ONLY the JSON object, no other text.`,
 

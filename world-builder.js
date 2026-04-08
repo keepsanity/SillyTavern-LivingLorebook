@@ -130,14 +130,16 @@ CRITICAL RULES:
 - ONLY use information that already exists in the entries below. Do NOT add, invent, or extrapolate any new details.
 - Preserve ALL content faithfully — including adult, violent, or sensitive details. Do NOT censor or omit anything.
 - Split entries that cover multiple topics into separate entries.
-- Merge entries that are about the exact same thing.
+- Merge entries that are about the exact same thing — remove ALL duplicates.
+- Do NOT duplicate the same information across different categories. If something is an event, record it ONLY as an event — do not also create a character or relationship entry with the same info rephrased. Pick the single most fitting category.
 - Each entry covers ONE specific thing (one trait, one location, one event, etc.)
-- For "event" category: title MUST include RP date/time/day if available (e.g., "Day 3 오후 - Snow 첫 외출")
+- For "event" category: title MUST include RP date/time/day if available (e.g., "Day 3 afternoon - first outing")
+- Include memorable quotes, dialogue, text messages, letters verbatim when present in original entries.
 
 Current entries:
 ${existingEntries.join('\n\n')}
 
-Output a JSON array. Each entry must have: "title", "content" (1-3 sentences, using ONLY original information), "keywords" (array), "category" (character/relationship/location/routine/item/event/fact)
+Output a JSON array. Each entry must have: "title", "content" (2-5 sentences, using ONLY original information), "keywords" (array), "category" (character/relationship/location/routine/item/event/fact)
 
 Output ONLY the JSON array.`;
 
