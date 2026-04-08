@@ -6,7 +6,7 @@
  */
 
 import { event_types } from '../../../events.js';
-import { saveSettingsDebounced, characters, this_chid } from '../../../../script.js';
+import { saveSettingsDebounced, characters, this_chid, chat_metadata, saveMetadata } from '../../../../script.js';
 import { world_names, createNewWorldInfo } from '../../../world-info.js';
 import { power_user } from '../../../power-user.js';
 import { initStore, getSettings, saveSettings, loadTargetLorebook, calculateTierStats, getMetadata, DEFAULT_SETTINGS } from './lore-store.js';
@@ -42,6 +42,27 @@ let settings = null;
 let isProcessing = false;
 let currentView = 'timeline'; // 'timeline' | 'settings'
 let activeFilter = 'all';
+
+const METADATA_KEY = 'living_lorebook';
+
+/**
+ * 현재 채팅의 로어북 이름을 chat_metadata에서 읽기
+ */
+function getChatLorebook() {
+    return chat_metadata?.[METADATA_KEY]?.targetLorebook || '';
+}
+
+/**
+ * 현재 채팅에 로어북 연결 (chat_metadata에 저장)
+ */
+function setChatLorebook(lorebookName) {
+    if (!chat_metadata) return;
+    if (!chat_metadata[METADATA_KEY]) chat_metadata[METADATA_KEY] = {};
+    chat_metadata[METADATA_KEY].targetLorebook = lorebookName;
+    settings.targetLorebook = lorebookName;
+    saveSettings();
+    saveMetadata();
+}
 
 // ============================================================
 // Init
@@ -101,8 +122,7 @@ async function loadSidebarSettings() {
         .val(settings.targetLorebook || '')
         .on('change', function () {
             const val = $(this).val();
-            settings.targetLorebook = val;
-            saveSettings();
+            setChatLorebook(val);
             refreshPanel();
         });
 
@@ -300,6 +320,20 @@ function createPanel() {
         <!-- Settings view (hidden by default) -->
         <div class="ll-settings-view" id="ll_settings_view">
             <div class="ll-settings-section-title">
+                <i class="fa-solid fa-map-pin"></i> 엔트리 삽입 위치
+            </div>
+            <div class="ll-settings-row">
+                <label>위치</label>
+                <select class="ll-settings-input" id="ll_s_position">
+                    <option value="0">↑Char (캐릭터 정의 전)</option>
+                    <option value="1">↓Char (캐릭터 정의 후)</option>
+                    <option value="2">↑EM (예시 메시지 전)</option>
+                    <option value="3">↓EM (예시 메시지 후)</option>
+                    <option value="5">↑AN (작가노트 전)</option>
+                    <option value="6">↓AN (작가노트 후)</option>
+                </select>
+            </div>
+            <div class="ll-settings-section-title">
                 <i class="fa-solid fa-magnifying-glass"></i> 벡터 검색
             </div>
             <div class="ll-settings-row">
@@ -417,6 +451,7 @@ function bindSettingsInputs(panel) {
         });
     };
 
+    bind('#ll_s_position', 'entryPosition');
     bind('#ll_s_topk', 'vectorTopK');
     bind('#ll_s_threshold', 'vectorThreshold', v => parseFloat(v) || 0.3);
     bind('#ll_s_tier2', 'tier2TargetRatio');
@@ -541,8 +576,7 @@ async function renderTimeline() {
         container.querySelector('#ll_empty_lorebook')?.addEventListener('change', (e) => {
             const val = e.target.value;
             if (!val) return;
-            settings.targetLorebook = val;
-            saveSettings();
+            setChatLorebook(val);
             // 사이드바 드롭다운도 동기화
             $('#ll_target_lorebook').val(val);
             renderTimeline();
@@ -558,8 +592,7 @@ async function renderTimeline() {
             const newName = `LL_${charName}`;
             try {
                 await createNewWorldInfo(newName);
-                settings.targetLorebook = newName;
-                saveSettings();
+                setChatLorebook(newName);
                 populateLorebookDropdown();
                 $('#ll_target_lorebook').val(newName);
                 toastr.success(`로어북 "${newName}" 이 생성되었습니다.`);
@@ -578,15 +611,13 @@ async function renderTimeline() {
         data = await loadTargetLorebook();
     } catch {
         // 로어북이 삭제됐거나 로드 실패 → 연결 해제 후 선택 UI 표시
-        settings.targetLorebook = '';
-        saveSettings();
+        setChatLorebook('');
         $('#ll_target_lorebook').val('');
         return renderTimeline();
     }
 
     if (!data) {
-        settings.targetLorebook = '';
-        saveSettings();
+        setChatLorebook('');
         $('#ll_target_lorebook').val('');
         return renderTimeline();
     }
@@ -795,8 +826,7 @@ async function handleBuildWorld() {
 
         try {
             await createNewWorldInfo(newName);
-            settings.targetLorebook = newName;
-            saveSettings();
+            setChatLorebook(newName);
             populateLorebookDropdown();
             toastr.info(`로어북 "${newName}" 이 생성되었습니다.`);
         } catch (err) {
@@ -919,6 +949,10 @@ function registerEventListeners() {
 
     // 채팅 변경 시 배지 업데이트
     eventSource.on(event_types.CHAT_CHANGED, () => {
+        // 채팅별 로어북 복원
+        const chatLorebook = getChatLorebook();
+        settings.targetLorebook = chatLorebook;
+        $('#ll_target_lorebook').val(chatLorebook);
         updateStatusBar();
     });
 

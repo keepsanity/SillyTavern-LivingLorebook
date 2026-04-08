@@ -15,6 +15,28 @@ import { getTokenCountAsync } from '../../../tokenizers.js';
 
 const EXTENSION_NAME = 'SillyTavern-LivingLorebook';
 
+// 카테고리별 order 범위 (1000 단위)
+const CATEGORY_ORDER_BASE = {
+    character: 1000,
+    relationship: 2000,
+    location: 3000,
+    event: 4000,
+    routine: 5000,
+    item: 6000,
+    fact: 7000,
+};
+
+// 카테고리별 XML 태그
+export const CATEGORY_TAGS = {
+    character: 'character_info',
+    relationship: 'relationship_info',
+    location: 'location_info',
+    event: 'event_log',
+    routine: 'routine_info',
+    item: 'item_info',
+    fact: 'world_setting',
+};
+
 // ============================================================
 // Default Settings
 // ============================================================
@@ -33,6 +55,10 @@ export const DEFAULT_SETTINGS = {
     tier3MessageAge: 150,
     tier2TargetRatio: 50,
     tier3TargetRatio: 20,
+
+    // 엔트리 기본 위치/순서 (새 엔트리 생성 시 적용)
+    // position: 0=↑Char, 1=↓Char, 2=↑EM, 3=↓EM, 4=@D, 5=↑AN, 6=↓AN
+    entryPosition: 1,
 
     // 벡터 검색
     vectorTopK: 10,
@@ -94,6 +120,8 @@ Rules:
 - Only deactivate if information is explicitly contradicted
 - Each entry should be about ONE specific thing (one character trait, one location, one event)
 - Keep entries concise (1-3 sentences)
+- For "event" category entries: title MUST include the RP date/time/day if mentioned (e.g., "Day 3 오후 - Snow 첫 외출", "03.21 밤 - 천둥 PTSD 발작")
+- Preserve ALL details including violence, trauma, sensitive/adult content. Do NOT censor.
 - Output ONLY the JSON object, no other text.`,
 
     compressPrompt: `Compress the following lorebook entry to approximately {{targetRatio}}% of its current length.
@@ -213,8 +241,11 @@ export async function createEntry(lorebookName, data, { title, content, keywords
     entry.comment = title;
     setWIOriginalDataValue(data, uid, 'comment', title);
 
-    entry.content = content;
-    setWIOriginalDataValue(data, uid, 'content', content);
+    // Content: 카테고리 태그로 래핑 + 제목 포함
+    const tag = CATEGORY_TAGS[category] || 'world_setting';
+    const wrappedContent = `<${tag}>\n[${title}] ${content}\n</${tag}>`;
+    entry.content = wrappedContent;
+    setWIOriginalDataValue(data, uid, 'content', wrappedContent);
 
     // Keywords — WI key에도 넣고, 벡터도 함께 사용
     const keyArray = Array.isArray(keywords) ? keywords : [title];
@@ -234,6 +265,19 @@ export async function createEntry(lorebookName, data, { title, content, keywords
     // 벡터 저장소가 이 엔트리를 벡터화하도록 플래그 설정
     entry.vectorized = true;
     setWIOriginalDataValue(data, uid, 'vectorized', true);
+
+    // Position: 설정값 사용
+    entry.position = _settings.entryPosition ?? 1;
+    setWIOriginalDataValue(data, uid, 'position', entry.position);
+
+    // Order: 카테고리별 범위 + 자동 증가
+    const orderBase = CATEGORY_ORDER_BASE[category] ?? 7000;
+    const sameCategoryCount = Object.values(data.entries || {}).filter(e => {
+        const m = getMetadata(e.uid ?? '');
+        return m?.category === category && !e.disable;
+    }).length;
+    entry.order = orderBase + sameCategoryCount;
+    setWIOriginalDataValue(data, uid, 'order', entry.order);
 
     // Scan depth
     entry.scanDepth = null;

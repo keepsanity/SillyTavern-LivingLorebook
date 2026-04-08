@@ -132,6 +132,7 @@ CRITICAL RULES:
 - Split entries that cover multiple topics into separate entries.
 - Merge entries that are about the exact same thing.
 - Each entry covers ONE specific thing (one trait, one location, one event, etc.)
+- For "event" category: title MUST include RP date/time/day if available (e.g., "Day 3 오후 - Snow 첫 외출")
 
 Current entries:
 ${existingEntries.join('\n\n')}
