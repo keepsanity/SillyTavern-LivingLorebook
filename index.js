@@ -875,7 +875,7 @@ async function handleOrganize() {
     setToolbarProcessing(true, 'organize');
 
     try {
-        const result = await organize(chat);
+        const result = await organize(chat, getCharacterContext());
         const parts = [];
         if (result.added > 0) parts.push(`추가 ${result.added}`);
         if (result.updated > 0) parts.push(`수정 ${result.updated}`);

@@ -23,7 +23,7 @@ const LOG_PREFIX = '[LivingLorebook]';
  * @param {object[]} chat - 현재 채팅 배열
  * @returns {Promise<{added: number, updated: number, deactivated: number}>}
  */
-export async function organize(chat) {
+export async function organize(chat, characterContext = '') {
     const settings = getSettings();
 
     if (!settings.targetLorebook) {
@@ -56,12 +56,16 @@ export async function organize(chat) {
     }).join('\n');
 
     // LLM 호출
+    const charInfoBlock = characterContext
+        ? `\n\nThe following character/persona info is ALREADY in the prompt — do NOT create lorebook entries for any of this:\n---\n${characterContext}\n---`
+        : '';
+
     const systemPrompt = `You are a memory manager for mature/adult roleplay. Output ONLY valid JSON. No markdown fences, no explanations.
 
-CRITICAL: Before adding ANY new entry, check if similar information already exists in the current lorebook entries below. If it does:
-- Use "update" (with the existing uid) to modify it — do NOT create a duplicate with "add"
-- Only use "add" for genuinely NEW information that has NO equivalent in the existing entries
-Ignore XML tags like <character_info>, <event_log> etc. when comparing — focus on the actual content.`;
+CRITICAL: Before adding ANY new entry, check if similar information already exists in:
+1. The current lorebook entries below — if it does, use "update" (with existing uid), do NOT "add" a duplicate
+2. The character card/persona info below — if it's already there, do NOT add it at all
+Ignore XML tags like <character_info>, <event_log> etc. when comparing — focus on the actual content.${charInfoBlock}`;
     const userPrompt = settings.organizePrompt
         .replace('{{currentEntries}}', currentEntries.join('\n') || '(none)')
         .replace('{{conversation}}', conversationText);
