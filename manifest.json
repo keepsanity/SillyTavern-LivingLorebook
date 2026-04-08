@@ -1,0 +1,12 @@
+{
+    "display_name": "Living Lorebook",
+    "loading_order": 200,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "keepsanity",
+    "version": "0.1.0",
+    "auto_update": false,
+    "description": ""
+}

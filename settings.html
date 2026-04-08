@@ -1,0 +1,44 @@
+<div class="ll_settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b><i class="fa-solid fa-brain"></i> Living Lorebook</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+
+            <!-- 활성화 -->
+            <div class="ll-row" style="margin-bottom: 4px;">
+                <label class="checkbox_label">
+                    <input id="ll_enabled" type="checkbox" />
+                    <span>확장 활성화</span>
+                </label>
+            </div>
+
+            <!-- 대상 로어북 -->
+            <div class="ll-row">
+                <label><i class="fa-solid fa-book" style="color: #63b3ed; margin-right: 4px;"></i>대상 로어북</label>
+                <select id="ll_target_lorebook" class="ll-select">
+                    <option value="">(선택)</option>
+                </select>
+            </div>
+
+            <!-- Connection Profile -->
+            <div class="ll-row">
+                <label><i class="fa-solid fa-plug" style="color: #81e6d9; margin-right: 4px;"></i>Connection Profile</label>
+                <select class="ll-select connection_profile">
+                    <option value="">(메인 API 사용)</option>
+                </select>
+                <div class="ll-help" style="width: 100%; margin-top: 2px;">기억 관리에 사용할 별도 모델. 비워두면 메인 API 사용.</div>
+            </div>
+
+            <hr class="ll-divider" />
+
+            <div class="ll-row" style="justify-content: center;">
+                <button id="ll_open_panel" class="menu_button" style="width: unset; white-space: nowrap; flex-direction: row;">
+                    <i class="fa-solid fa-brain" style="margin-right: 4px;"></i> Living Lorebook 패널 열기
+                </button>
+            </div>
+
+        </div>
+    </div>
+</div>

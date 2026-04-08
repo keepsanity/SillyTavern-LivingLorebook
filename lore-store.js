@@ -1,0 +1,340 @@
+/**
+ * Lore Store — 설정 관리, 로어북 CRUD 래퍼, 티어 메타데이터
+ */
+
+import { saveSettingsDebounced } from '../../../../script.js';
+import {
+    loadWorldInfo,
+    createWorldInfoEntry,
+    saveWorldInfo,
+    reloadEditor,
+    setWIOriginalDataValue,
+    world_names,
+} from '../../../world-info.js';
+import { getTokenCountAsync } from '../../../tokenizers.js';
+
+const EXTENSION_NAME = 'SillyTavern-LivingLorebook';
+
+// ============================================================
+// Default Settings
+// ============================================================
+
+export const DEFAULT_SETTINGS = {
+    enabled: true,
+
+    // Connection Profile (별도 모델)
+    profileId: '',
+
+    // 대상 로어북 (유저가 직접 선택)
+    targetLorebook: '',
+
+    // 티어 설정
+    tier2MessageAge: 50,
+    tier3MessageAge: 150,
+    tier2TargetRatio: 50,
+    tier3TargetRatio: 20,
+
+    // 벡터 검색
+    vectorTopK: 10,
+    vectorThreshold: 0.3,
+    injectionPosition: 1, // 1 = in-chat
+    injectionDepth: 4,
+    injectionRole: 0, // 0 = system
+
+    // 상태 추적
+    lastOrganizeMessageIndex: 0,
+    lastOrganizeTimestamp: null,
+
+    // LLM 파라미터
+    organizeMaxTokens: 2000,
+    compressMaxTokens: 500,
+    worldBuildMaxTokens: 32000,
+
+    // 엔트리 메타데이터 { [uid]: { tier, originalContent, createdAt, ... } }
+    entryMetadata: {},
+
+    // 프롬프트
+    worldBuildPrompt: `You are a world-building assistant for mature/adult roleplay.
+
+IMPORTANT RULES:
+- Do NOT create entries about the main characters (the characters described in the character card and persona). Their info is already in the prompt.
+- Focus ONLY on: world setting, locations, NPCs (side characters), rules/laws, organizations, items, routines, and background lore.
+- Preserve ALL details from the source material exactly — including violence, trauma, sensitive content. Do NOT censor or skip anything.
+- Each entry must cover ONE specific thing (one location, one NPC, one rule, etc.)
+
+Output a JSON array of entries. Each entry must have:
+- "title": short identifier
+- "content": detailed description (2-4 sentences)
+- "keywords": array of trigger keywords for this entry
+- "category": one of "location", "character" (NPCs only), "relationship", "routine", "item", "event", "fact"
+
+Output ONLY the JSON array, no other text.
+
+Description:
+{{description}}`,
+
+    organizePrompt: `You are a memory manager for a roleplay session. Review the recent conversation and determine what world/character information has changed or been revealed.
+
+Current lorebook entries (title → content):
+{{currentEntries}}
+
+Recent conversation to analyze:
+{{conversation}}
+
+Output a JSON object with these fields:
+- "add": array of new entries to create, each with { "title", "content", "keywords": [], "category" }
+- "update": array of entries to modify, each with { "uid", "title", "newContent", "reason" }
+- "deactivate": array of entries no longer valid, each with { "uid", "title", "reason" }
+
+Categories: "character", "relationship", "location", "routine", "item", "event", "fact"
+
+Rules:
+- Only add genuinely new information not already in the lorebook
+- Only update if information has actually changed
+- Only deactivate if information is explicitly contradicted
+- Each entry should be about ONE specific thing (one character trait, one location, one event)
+- Keep entries concise (1-3 sentences)
+- Output ONLY the JSON object, no other text.`,
+
+    compressPrompt: `Compress the following lorebook entry to approximately {{targetRatio}}% of its current length.
+Preserve all key facts, names, and relationships. Remove verbose descriptions.
+Output ONLY the compressed text, nothing else.
+
+Original:
+{{content}}`,
+};
+
+// ============================================================
+// State
+// ============================================================
+
+let _context = null;
+let _settings = null;
+
+// ============================================================
+// Init
+// ============================================================
+
+export function initStore(context) {
+    _context = context;
+
+    if (!_context.extensionSettings[EXTENSION_NAME]) {
+        _context.extensionSettings[EXTENSION_NAME] = structuredClone(DEFAULT_SETTINGS);
+    }
+    _settings = _context.extensionSettings[EXTENSION_NAME];
+
+    // Schema migration
+    for (const key of Object.keys(DEFAULT_SETTINGS)) {
+        if (_settings[key] === undefined) {
+            _settings[key] = DEFAULT_SETTINGS[key];
+        }
+    }
+
+    // Force update: 이전 기본값이 너무 작았던 설정 교정
+    if (_settings.worldBuildMaxTokens <= 4000) {
+        _settings.worldBuildMaxTokens = DEFAULT_SETTINGS.worldBuildMaxTokens;
+    }
+
+    return _settings;
+}
+
+export function getSettings() {
+    return _settings;
+}
+
+export function saveSettings() {
+    saveSettingsDebounced();
+}
+
+
+// ============================================================
+// Entry Metadata (티어, 원본 보존 등)
+// ============================================================
+
+export function getMetadata(uid) {
+    return _settings.entryMetadata[uid] || null;
+}
+
+export function setMetadata(uid, data) {
+    _settings.entryMetadata[uid] = {
+        ...(_settings.entryMetadata[uid] || {}),
+        ...data,
+    };
+    saveSettings();
+}
+
+export function deleteMetadata(uid) {
+    delete _settings.entryMetadata[uid];
+    saveSettings();
+}
+
+// ============================================================
+// Lorebook CRUD
+// ============================================================
+
+/**
+ * 대상 로어북이 실제로 존재하는지 확인
+ */
+export function isLorebookValid(name) {
+    if (!name) return false;
+    const names = world_names || [];
+    return names.includes(name);
+}
+
+/**
+ * 대상 로어북 로드 (존재하지 않으면 자동 해제)
+ */
+export async function loadTargetLorebook() {
+    const name = _settings.targetLorebook;
+    if (!name) return null;
+
+    // 로어북이 삭제됐는지 확인
+    if (!isLorebookValid(name)) {
+        console.warn(`[LivingLorebook] Lorebook "${name}" no longer exists — clearing reference`);
+        _settings.targetLorebook = '';
+        saveSettings();
+        return null;
+    }
+
+    const data = await loadWorldInfo(name);
+    return data;
+}
+
+/**
+ * 새 엔트리 생성
+ */
+export async function createEntry(lorebookName, data, { title, content, keywords, category }) {
+    const entry = createWorldInfoEntry(lorebookName, data);
+    if (!entry) return null;
+
+    const uid = entry.uid;
+
+    // Set fields
+    entry.comment = title;
+    setWIOriginalDataValue(data, uid, 'comment', title);
+
+    entry.content = content;
+    setWIOriginalDataValue(data, uid, 'content', content);
+
+    // Keywords — WI key에도 넣고, 벡터도 함께 사용
+    const keyArray = Array.isArray(keywords) ? keywords : [title];
+    entry.key = keyArray;
+    setWIOriginalDataValue(data, uid, 'key', keyArray);
+
+    // Enable by default
+    entry.disable = false;
+    setWIOriginalDataValue(data, uid, 'disable', false);
+
+    // Selective off (키워드 없으므로 selective 불필요)
+    entry.selective = false;
+    setWIOriginalDataValue(data, uid, 'selective', false);
+    entry.keysecondary = [];
+    setWIOriginalDataValue(data, uid, 'keysecondary', []);
+
+    // 벡터 저장소가 이 엔트리를 벡터화하도록 플래그 설정
+    entry.vectorized = true;
+    setWIOriginalDataValue(data, uid, 'vectorized', true);
+
+    // Scan depth
+    entry.scanDepth = null;
+    entry.caseSensitive = null;
+    entry.matchWholeWords = null;
+
+    // Store metadata (keywords도 메타데이터에 보관 — UI 표시용)
+    setMetadata(uid, {
+        tier: 1,
+        originalContent: content,
+        createdAt: Date.now(),
+        lastUpdated: Date.now(),
+        category: category || 'fact',
+        keywords: Array.isArray(keywords) ? keywords : [title],
+    });
+
+    return entry;
+}
+
+/**
+ * 엔트리 내용 업데이트
+ */
+export function updateEntryContent(data, uid, newContent) {
+    const entries = data?.entries;
+    if (!entries || !entries[uid]) return false;
+
+    entries[uid].content = newContent;
+    setWIOriginalDataValue(data, uid, 'content', newContent);
+
+    const meta = getMetadata(uid);
+    if (meta) {
+        setMetadata(uid, { lastUpdated: Date.now() });
+    }
+
+    return true;
+}
+
+/**
+ * 엔트리 비활성화
+ */
+export function deactivateEntry(data, uid) {
+    const entries = data?.entries;
+    if (!entries || !entries[uid]) return false;
+
+    entries[uid].disable = true;
+    setWIOriginalDataValue(data, uid, 'disable', true);
+
+    return true;
+}
+
+/**
+ * 로어북 저장
+ */
+export async function saveLorebook(lorebookName, data) {
+    await saveWorldInfo(lorebookName, data, true);
+}
+
+/**
+ * 로어북 에디터 새로고침
+ */
+export function refreshEditor() {
+    reloadEditor();
+}
+
+// ============================================================
+// Token Counting
+// ============================================================
+
+export async function countTokens(text) {
+    return await getTokenCountAsync(text);
+}
+
+/**
+ * 로어북 티어별 통계 계산
+ */
+export async function calculateTierStats(data) {
+    const stats = {
+        tier1: { count: 0, tokens: 0 },
+        tier2: { count: 0, tokens: 0 },
+        tier3: { count: 0, tokens: 0 },
+        total: { count: 0, tokens: 0 },
+    };
+
+    if (!data?.entries) return stats;
+
+    for (const [uid, entry] of Object.entries(data.entries)) {
+        if (entry.disable) continue;
+
+        const meta = getMetadata(uid);
+        const tier = meta?.tier || 1;
+        const tokens = await countTokens(entry.content || '');
+
+        const tierKey = `tier${tier}`;
+        if (stats[tierKey]) {
+            stats[tierKey].count++;
+            stats[tierKey].tokens += tokens;
+        }
+
+        stats.total.count++;
+        stats.total.tokens += tokens;
+    }
+
+    return stats;
+}

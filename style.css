@@ -1,0 +1,793 @@
+/* ============================================================
+   Living Lorebook — Styles
+   ============================================================ */
+
+/* ── Sidebar Settings (minimal) ── */
+.ll_settings {
+    font-size: 14px;
+}
+
+.ll_settings > .inline-drawer > .inline-drawer-toggle {
+    background: linear-gradient(135deg, rgba(99, 179, 237, 0.15) 0%, rgba(129, 230, 217, 0.12) 100%);
+    padding: 10px 12px;
+    border-radius: 8px;
+    transition: background 0.2s ease;
+}
+
+.ll_settings > .inline-drawer > .inline-drawer-toggle:hover {
+    background: linear-gradient(135deg, rgba(99, 179, 237, 0.25) 0%, rgba(129, 230, 217, 0.18) 100%);
+}
+
+.ll_settings > .inline-drawer > .inline-drawer-toggle b {
+    background: linear-gradient(135deg, #63b3ed 0%, #81e6d9 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-size: 15px;
+}
+
+.ll-row {
+    margin: 8px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.ll-row label {
+    flex: 1;
+    min-width: 120px;
+    font-size: 13px;
+}
+
+.ll-select {
+    width: 100%;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: var(--SmartThemeBlurTintColor);
+    color: var(--SmartThemeBodyColor);
+}
+
+.ll-help {
+    font-size: 12px;
+    opacity: 0.6;
+    line-height: 1.5;
+}
+
+.ll-divider {
+    border: none;
+    border-top: 1px solid var(--SmartThemeBorderColor);
+    margin: 14px 0;
+    opacity: 0.5;
+}
+
+.ll_settings .checkbox_label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.ll_settings .checkbox_label input[type="checkbox"] {
+    accent-color: #63b3ed;
+}
+
+/* ============================================================
+   Floating Trigger Button
+   ============================================================ */
+
+.ll-float-trigger {
+    position: fixed;
+    bottom: 80px;
+    right: 16px;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, rgba(99, 179, 237, 0.2) 0%, rgba(129, 230, 217, 0.15) 100%);
+    border: 2px solid rgba(99, 179, 237, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 31000;
+    color: #63b3ed;
+    font-size: 16px;
+    transition: all 0.25s ease;
+    box-shadow: 0 2px 12px rgba(99, 179, 237, 0.15);
+    touch-action: none;
+    user-select: none;
+    backdrop-filter: blur(8px);
+}
+
+.ll-float-trigger:hover {
+    background: linear-gradient(135deg, rgba(99, 179, 237, 0.35) 0%, rgba(129, 230, 217, 0.25) 100%);
+    border-color: rgba(99, 179, 237, 0.6);
+    box-shadow: 0 4px 20px rgba(99, 179, 237, 0.3);
+    transform: scale(1.08);
+}
+
+.ll-float-trigger.active {
+    background: linear-gradient(135deg, rgba(99, 179, 237, 0.4) 0%, rgba(129, 230, 217, 0.3) 100%);
+    border-color: #63b3ed;
+    box-shadow: 0 0 20px rgba(99, 179, 237, 0.4);
+}
+
+/* Badge */
+.ll-float-trigger[data-count]:not([data-count="0"])::after {
+    content: attr(data-count);
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    background: #e84393;
+    color: #fff;
+    font-size: 10px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+    line-height: 1;
+}
+
+/* ============================================================
+   Main Panel — Full Timeline Modal
+   ============================================================ */
+
+.ll-panel-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 31001;
+    display: none;
+    animation: ll-fade-in 0.2s ease;
+}
+
+.ll-panel-overlay.open {
+    display: block;
+}
+
+@keyframes ll-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.ll-panel {
+    position: fixed;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(680px, calc(100vw - 20px));
+    height: calc(100vh - 20px);
+    background: var(--SmartThemeBlurTintColor, rgba(20, 20, 30, 0.95));
+    border: 1px solid var(--SmartThemeBorderColor, #555);
+    border-radius: 16px;
+    z-index: 31002;
+    display: none;
+    flex-direction: column;
+    box-shadow: 0 16px 60px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(16px);
+    overflow: hidden;
+}
+
+.ll-panel.open {
+    display: flex;
+    animation: ll-panel-in 0.2s ease;
+}
+
+@keyframes ll-panel-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* 데스크톱에서는 중앙 정렬 */
+@media (min-width: 768px) {
+    .ll-panel {
+        top: 50%;
+        transform: translate(-50%, -50%);
+        height: min(85vh, 700px);
+    }
+}
+
+/* 모바일 최적화 */
+@media (max-width: 767px) {
+    .ll-panel {
+        width: 100vw;
+        height: 100dvh;
+        top: 0;
+        left: 0;
+        transform: none;
+        border-radius: 0;
+        border: none;
+    }
+
+    .ll-panel.open {
+        animation: none;
+    }
+
+    .ll-toolbar {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        padding: 8px 12px;
+    }
+
+    .ll-toolbar-btn {
+        font-size: 11px;
+        padding: 6px 10px;
+    }
+
+    .ll-filter-bar {
+        padding: 6px 12px;
+    }
+
+    .ll-timeline {
+        padding: 12px;
+    }
+
+    .ll-panel-header {
+        padding: 12px 16px;
+    }
+
+    .ll-status-bar {
+        padding: 8px 12px;
+    }
+}
+
+/* ── Panel Header ── */
+.ll-panel-header {
+    display: flex;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.08));
+    gap: 12px;
+    flex-shrink: 0;
+}
+
+.ll-panel-title {
+    flex: 1;
+    font-size: 16px;
+    font-weight: bold;
+    background: linear-gradient(135deg, #63b3ed 0%, #81e6d9 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ll-panel-title i {
+    -webkit-text-fill-color: #63b3ed;
+    font-size: 14px;
+}
+
+.ll-panel-close {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--SmartThemeBodyColor, #ccc);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    transition: all 0.15s ease;
+}
+
+.ll-panel-close:hover {
+    background: rgba(255, 100, 100, 0.1);
+    border-color: rgba(255, 100, 100, 0.3);
+    color: #fc8181;
+}
+
+/* ── Action Toolbar ── */
+.ll-toolbar {
+    display: flex;
+    gap: 6px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.06));
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+
+.ll-toolbar-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 7px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
+    background: transparent;
+    color: var(--SmartThemeBodyColor, #ccc);
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.ll-toolbar-btn:hover {
+    background: rgba(99, 179, 237, 0.1);
+    border-color: rgba(99, 179, 237, 0.3);
+    color: #63b3ed;
+}
+
+.ll-toolbar-btn:active {
+    transform: scale(0.97);
+}
+
+.ll-toolbar-btn.processing {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.ll-toolbar-btn.processing i {
+    animation: ll-spin 1s linear infinite;
+}
+
+@keyframes ll-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.ll-toolbar-btn i {
+    font-size: 11px;
+}
+
+/* 세계관 생성 */
+.ll-toolbar-btn.build { color: #b794f4; }
+.ll-toolbar-btn.build:hover { background: rgba(183, 148, 244, 0.1); border-color: rgba(183, 148, 244, 0.3); color: #d6bcfa; }
+
+/* 기억 정리 */
+.ll-toolbar-btn.organize { color: #68d391; }
+.ll-toolbar-btn.organize:hover { background: rgba(104, 211, 145, 0.1); border-color: rgba(104, 211, 145, 0.3); color: #9ae6b4; }
+
+/* 압축 */
+.ll-toolbar-btn.compress { color: #f6ad55; }
+.ll-toolbar-btn.compress:hover { background: rgba(246, 173, 85, 0.1); border-color: rgba(246, 173, 85, 0.3); color: #fbd38d; }
+
+/* 재구성 */
+.ll-toolbar-btn.reorganize { color: #63b3ed; }
+.ll-toolbar-btn.reorganize:hover { background: rgba(99, 179, 237, 0.1); border-color: rgba(99, 179, 237, 0.3); color: #90cdf4; }
+
+/* ── Filter Bar ── */
+.ll-filter-bar {
+    display: flex;
+    gap: 6px;
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.06));
+    overflow-x: auto;
+    flex-shrink: 0;
+}
+
+.ll-filter-chip {
+    padding: 4px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
+    background: transparent;
+    color: var(--SmartThemeBodyColor, #aaa);
+    cursor: pointer;
+    font-size: 11px;
+    font-family: inherit;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.ll-filter-chip:hover {
+    background: rgba(99, 179, 237, 0.08);
+}
+
+.ll-filter-chip.active {
+    background: rgba(99, 179, 237, 0.15);
+    border-color: rgba(99, 179, 237, 0.4);
+    color: #63b3ed;
+}
+
+/* ── Timeline Content ── */
+.ll-timeline {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 16px 20px;
+}
+
+.ll-timeline::-webkit-scrollbar {
+    width: 6px;
+}
+
+.ll-timeline::-webkit-scrollbar-thumb {
+    background: rgba(99, 179, 237, 0.2);
+    border-radius: 3px;
+}
+
+.ll-timeline::-webkit-scrollbar-thumb:hover {
+    background: rgba(99, 179, 237, 0.4);
+}
+
+/* Empty state */
+.ll-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--SmartThemeBodyColor, #888);
+    opacity: 0.5;
+    gap: 12px;
+}
+
+.ll-empty i {
+    font-size: 32px;
+    color: #63b3ed;
+    opacity: 0.4;
+}
+
+.ll-empty span {
+    font-size: 13px;
+}
+
+.ll-empty-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+    width: 100%;
+    max-width: 280px;
+}
+
+.ll-empty-select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
+    border-radius: 8px;
+    background: var(--SmartThemeBlurTintColor, rgba(30,30,40,0.8));
+    color: var(--SmartThemeBodyColor, #ccc);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.ll-empty-btn {
+    width: 100%;
+    padding: 8px 14px;
+    border: 1px solid rgba(99, 179, 237, 0.3);
+    border-radius: 8px;
+    background: rgba(99, 179, 237, 0.1);
+    color: #63b3ed;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.ll-empty-btn:hover {
+    background: rgba(99, 179, 237, 0.2);
+    border-color: rgba(99, 179, 237, 0.5);
+}
+
+/* Category Group */
+.ll-category-group {
+    margin-bottom: 16px;
+}
+
+.ll-category-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    margin-bottom: 6px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.ll-category-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.ll-category-label {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    flex: 1;
+}
+
+.ll-category-count {
+    font-size: 11px;
+    opacity: 0.5;
+    font-family: 'Consolas', 'Monaco', monospace;
+}
+
+/* Category colors */
+.ll-cat-character .ll-category-icon { background: rgba(99, 179, 237, 0.15); color: #63b3ed; }
+.ll-cat-character .ll-category-label { color: #63b3ed; }
+
+.ll-cat-relationship .ll-category-icon { background: rgba(246, 135, 179, 0.15); color: #f687b3; }
+.ll-cat-relationship .ll-category-label { color: #f687b3; }
+
+.ll-cat-location .ll-category-icon { background: rgba(104, 211, 145, 0.15); color: #68d391; }
+.ll-cat-location .ll-category-label { color: #68d391; }
+
+.ll-cat-event .ll-category-icon { background: rgba(246, 224, 94, 0.15); color: #f6e05e; }
+.ll-cat-event .ll-category-label { color: #f6e05e; }
+
+.ll-cat-routine .ll-category-icon { background: rgba(183, 148, 244, 0.15); color: #b794f4; }
+.ll-cat-routine .ll-category-label { color: #b794f4; }
+
+.ll-cat-item .ll-category-icon { background: rgba(246, 173, 85, 0.15); color: #f6ad55; }
+.ll-cat-item .ll-category-label { color: #f6ad55; }
+
+.ll-cat-fact .ll-category-icon { background: rgba(129, 230, 217, 0.15); color: #81e6d9; }
+.ll-cat-fact .ll-category-label { color: #81e6d9; }
+
+/* Entry Card */
+.ll-entry-card {
+    position: relative;
+    margin-left: 12px;
+    padding: 10px 14px;
+    border-left: 2px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.08));
+    margin-bottom: 4px;
+    border-radius: 0 8px 8px 0;
+    background: transparent;
+    transition: all 0.15s ease;
+    cursor: pointer;
+}
+
+.ll-entry-card:hover {
+    background: rgba(99, 179, 237, 0.04);
+    border-left-color: rgba(99, 179, 237, 0.3);
+}
+
+.ll-entry-card::before {
+    content: '';
+    position: absolute;
+    left: -5px;
+    top: 16px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
+    transition: background 0.15s ease;
+}
+
+.ll-entry-card:hover::before {
+    background: #63b3ed;
+}
+
+.ll-entry-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--SmartThemeEmColor, #eee);
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.ll-entry-content {
+    font-size: 12px;
+    color: var(--SmartThemeBodyColor, #aaa);
+    line-height: 1.6;
+    opacity: 0.85;
+}
+
+.ll-entry-keywords {
+    display: flex;
+    gap: 4px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+}
+
+.ll-entry-keyword {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(99, 179, 237, 0.08);
+    color: rgba(99, 179, 237, 0.7);
+    border: 1px solid rgba(99, 179, 237, 0.12);
+}
+
+/* Disabled entry */
+.ll-entry-card.disabled {
+    opacity: 0.35;
+}
+
+.ll-entry-card.disabled .ll-entry-title::after {
+    content: '비활성';
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.06);
+    color: rgba(255,255,255,0.3);
+    font-weight: normal;
+}
+
+/* ── Status Bar ── */
+.ll-status-bar {
+    display: flex;
+    align-items: center;
+    padding: 10px 20px;
+    border-top: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.06));
+    gap: 16px;
+    font-size: 11px;
+    color: var(--SmartThemeBodyColor, #888);
+    flex-shrink: 0;
+}
+
+.ll-status-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    opacity: 0.6;
+}
+
+.ll-status-item i {
+    font-size: 10px;
+    color: #63b3ed;
+}
+
+.ll-status-item .ll-status-value {
+    font-family: 'Consolas', 'Monaco', monospace;
+    color: #81e6d9;
+}
+
+.ll-status-spacer {
+    flex: 1;
+}
+
+.ll-status-btn {
+    background: transparent;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
+    color: var(--SmartThemeBodyColor, #aaa);
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 10px;
+    font-family: inherit;
+    transition: all 0.15s ease;
+}
+
+.ll-status-btn:hover {
+    background: rgba(99, 179, 237, 0.1);
+    border-color: rgba(99, 179, 237, 0.3);
+    color: #63b3ed;
+}
+
+/* ── Settings Modal (inside panel) ── */
+.ll-settings-view {
+    display: none;
+    flex-direction: column;
+    padding: 16px 20px;
+    gap: 12px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.ll-settings-view.active {
+    display: flex;
+}
+
+/* world input row도 숨길 때 설정뷰에 공간 확보 */
+.ll-panel:has(.ll-settings-view.active) .ll-world-input-row {
+    display: none !important;
+}
+
+.ll-settings-section-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--SmartThemeEmColor, #eee);
+    margin-top: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.06));
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.ll-settings-section-title i {
+    color: #63b3ed;
+    font-size: 11px;
+}
+
+.ll-settings-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ll-settings-row label {
+    flex: 1;
+    font-size: 12px;
+    min-width: 100px;
+}
+
+.ll-settings-input {
+    width: 70px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: var(--SmartThemeBlurTintColor);
+    color: var(--SmartThemeBodyColor);
+    text-align: center;
+    font-size: 12px;
+}
+
+.ll-settings-textarea {
+    width: 100%;
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: var(--SmartThemeBlurTintColor);
+    color: var(--SmartThemeBodyColor);
+    resize: vertical;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.ll-settings-unit {
+    font-size: 11px;
+    opacity: 0.5;
+}
+
+.ll-settings-reset-btn {
+    padding: 2px 8px;
+    font-size: 10px;
+    border-radius: 4px;
+    background: transparent;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
+    color: var(--SmartThemeBodyColor, #aaa);
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s ease;
+}
+
+.ll-settings-reset-btn:hover {
+    background: rgba(255, 100, 100, 0.08);
+    border-color: rgba(255, 100, 100, 0.3);
+    color: #fc8181;
+}
+
+/* World description input in toolbar area */
+.ll-world-input-row {
+    display: none;
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.06));
+    gap: 8px;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.ll-world-input-row.active {
+    display: flex;
+}
+
+.ll-world-input {
+    flex: 1;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: var(--SmartThemeBlurTintColor);
+    color: var(--SmartThemeBodyColor);
+    font-size: 12px;
+    font-family: inherit;
+}
+
+.ll-world-input::placeholder {
+    opacity: 0.4;
+}
