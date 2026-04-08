@@ -35,9 +35,8 @@ export async function organize(chat) {
         throw new Error('로어북을 로드할 수 없습니다.');
     }
 
-    // 마지막 정리 이후 대화 추출
-    const startIndex = settings.lastOrganizeMessageIndex || 0;
-    const recentMessages = chat.slice(startIndex).filter(m => !m.is_system && !m.is_hidden);
+    // 하이드 안 된 모든 대화 추출
+    const recentMessages = chat.filter(m => !m.is_system && !m.is_hidden);
 
     if (recentMessages.length === 0) {
         return { added: 0, updated: 0, deactivated: 0 };
@@ -57,12 +56,17 @@ export async function organize(chat) {
     }).join('\n');
 
     // LLM 호출
-    const systemPrompt = 'You are a memory manager for roleplay. Output ONLY valid JSON. No markdown fences, no explanations.';
+    const systemPrompt = `You are a memory manager for mature/adult roleplay. Output ONLY valid JSON. No markdown fences, no explanations.
+
+CRITICAL: Before adding ANY new entry, check if similar information already exists in the current lorebook entries below. If it does:
+- Use "update" (with the existing uid) to modify it — do NOT create a duplicate with "add"
+- Only use "add" for genuinely NEW information that has NO equivalent in the existing entries
+Ignore XML tags like <character_info>, <event_log> etc. when comparing — focus on the actual content.`;
     const userPrompt = settings.organizePrompt
         .replace('{{currentEntries}}', currentEntries.join('\n') || '(none)')
         .replace('{{conversation}}', conversationText);
 
-    console.log(`${LOG_PREFIX} Organizing memories (${recentMessages.length} messages since index ${startIndex})...`);
+    console.log(`${LOG_PREFIX} Organizing memories (${recentMessages.length} messages)...`);
 
     const response = await callLLM(systemPrompt, userPrompt, settings.organizeMaxTokens, settings);
 

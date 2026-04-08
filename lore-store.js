@@ -72,8 +72,8 @@ export const DEFAULT_SETTINGS = {
     lastOrganizeTimestamp: null,
 
     // LLM 파라미터
-    organizeMaxTokens: 2000,
-    compressMaxTokens: 500,
+    organizeMaxTokens: 16000,
+    compressMaxTokens: 16000,
     worldBuildMaxTokens: 32000,
 
     // 엔트리 메타데이터 { [uid]: { tier, originalContent, createdAt, ... } }
@@ -99,7 +99,7 @@ Output ONLY the JSON array, no other text.
 Description:
 {{description}}`,
 
-    organizePrompt: `You are a memory manager for a roleplay session. Review the recent conversation and determine what world/character information has changed or been revealed.
+    organizePrompt: `You are a memory manager for a mature/adult roleplay session. Analyze the conversation thoroughly and extract ALL meaningful information. Be detailed and comprehensive — do NOT summarize or skip.
 
 Current lorebook entries (title → content):
 {{currentEntries}}
@@ -107,21 +107,34 @@ Current lorebook entries (title → content):
 Recent conversation to analyze:
 {{conversation}}
 
+Extract information for EACH of these categories. Do NOT skip any category:
+
+1. **character** — Emotional/psychological changes, new traits revealed, reactions, habits discovered. When a character says something emotionally significant, QUOTE the dialogue directly (e.g., character said "...I'm not scared")
+2. **relationship** — Any change in how characters feel about each other: trust, affection, tension, conflict, intimacy, distance
+3. **location** — New places visited, changes to existing locations, details about rooms/buildings/areas
+4. **event** — Significant things that happened. Title MUST include RP date/time/day (e.g., "Day 3 afternoon - first outing")
+5. **routine** — Schedule changes, new habits, repeated behaviors
+6. **item** — Objects acquired, lost, used, gifted, or mentioned as significant
+7. **fact** — World rules, lore, background info revealed
+
 Output a JSON object with these fields:
-- "add": array of new entries to create, each with { "title", "content", "keywords": [], "category" }
+- "add": array of new entries, each with { "title", "content", "keywords": [], "category" }
 - "update": array of entries to modify, each with { "uid", "title", "newContent", "reason" }
 - "deactivate": array of entries no longer valid, each with { "uid", "title", "reason" }
 
-Categories: "character", "relationship", "location", "routine", "item", "event", "fact"
-
 Rules:
-- Only add genuinely new information not already in the lorebook
-- Only update if information has actually changed
-- Only deactivate if information is explicitly contradicted
-- Each entry should be about ONE specific thing (one character trait, one location, one event)
-- Keep entries concise (1-3 sentences)
-- For "event" category entries: title MUST include the RP date/time/day if mentioned (e.g., "Day 3 오후 - Snow 첫 외출", "03.21 밤 - 천둥 PTSD 발작")
-- Preserve ALL details including violence, trauma, sensitive/adult content. Do NOT censor.
+- Be THOROUGH. Capture the scene accurately without losing ANY important information.
+- For each entry's content: note the date/time if available, then write a detailed beat-by-beat record. Include:
+  • All important story beats and events
+  • Key interaction highlights and character developments
+  • Notable details, memorable quotes (DIRECTLY QUOTED), and revelations
+  • Significant physical actions, gestures, and body language
+  • Text messages, letters, notes, and other written media (quoted verbatim)
+  • Outcome and anything important for future interactions
+- Ignore all [OOC] conversation/interaction — only record in-character content.
+- Do NOT add info already in the character card/persona or already in the lorebook.
+- Each entry = ONE specific thing (one event, one character change, one relationship shift, etc.)
+- Content: 2-5 sentences per entry. Preserve ALL details including violence, trauma, sensitive/adult content. Do NOT censor.
 - Output ONLY the JSON object, no other text.`,
 
     compressPrompt: `Compress the following lorebook entry to approximately {{targetRatio}}% of its current length.
@@ -161,6 +174,12 @@ export function initStore(context) {
     // Force update: 이전 기본값이 너무 작았던 설정 교정
     if (_settings.worldBuildMaxTokens <= 4000) {
         _settings.worldBuildMaxTokens = DEFAULT_SETTINGS.worldBuildMaxTokens;
+    }
+    if (_settings.organizeMaxTokens <= 2000) {
+        _settings.organizeMaxTokens = DEFAULT_SETTINGS.organizeMaxTokens;
+    }
+    if (_settings.compressMaxTokens <= 500) {
+        _settings.compressMaxTokens = DEFAULT_SETTINGS.compressMaxTokens;
     }
 
     return _settings;
