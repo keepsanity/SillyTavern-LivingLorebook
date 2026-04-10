@@ -21,9 +21,11 @@ const LOG_PREFIX = '[LivingLorebook]';
 /**
  * 기억 정리 실행
  * @param {object[]} chat - 현재 채팅 배열
- * @returns {Promise<{added: number, updated: number, deactivated: number}>}
+ * @param {string} characterContext - 캐릭터 카드 + 페르소나
+ * @param {object} options - { rangeStart?, rangeEnd? } (inclusive, message index)
+ * @returns {Promise<{added: number, updated: number, deactivated: number, processedRange: [number, number]}>}
  */
-export async function organize(chat, characterContext = '') {
+export async function organize(chat, characterContext = '', options = {}) {
     const settings = getSettings();
 
     if (!settings.targetLorebook) {
@@ -35,11 +37,22 @@ export async function organize(chat, characterContext = '') {
         throw new Error('로어북을 로드할 수 없습니다.');
     }
 
-    // 하이드 안 된 모든 대화 추출
-    const recentMessages = chat.filter(m => !m.is_system && !m.is_hidden);
+    // 범위 지정 (없으면 전체)
+    const startIdx = Number.isInteger(options.rangeStart) ? Math.max(0, options.rangeStart) : 0;
+    const endIdx = Number.isInteger(options.rangeEnd) ? Math.min(chat.length - 1, options.rangeEnd) : chat.length - 1;
+
+    // 해당 범위의 하이드 안 된 메시지만 추출
+    const recentMessages = [];
+    const processedIndices = [];
+    for (let i = startIdx; i <= endIdx; i++) {
+        const m = chat[i];
+        if (!m || m.is_system || m.is_hidden) continue;
+        recentMessages.push(m);
+        processedIndices.push(i);
+    }
 
     if (recentMessages.length === 0) {
-        return { added: 0, updated: 0, deactivated: 0 };
+        return { added: 0, updated: 0, deactivated: 0, processedRange: [startIdx, endIdx] };
     }
 
     // 현재 엔트리 목록 생성
@@ -126,13 +139,13 @@ Ignore XML tags like <character_info>, <event_log> etc. when comparing — focus
             deleteHashes.push(getEntryHash(uid, entry.content));
 
             // 원본 보존
-            const meta = getMetadata(uid);
+            const meta = getMetadata(uid, settings.targetLorebook);
             if (meta && !meta.originalContent) {
-                setMetadata(uid, { originalContent: entry.content });
+                setMetadata(uid, { originalContent: entry.content }, settings.targetLorebook);
             }
 
-            updateEntryContent(data, uid, item.newContent);
-            setMetadata(uid, { lastUpdated: Date.now() });
+            updateEntryContent(data, uid, item.newContent, settings.targetLorebook);
+            setMetadata(uid, { lastUpdated: Date.now() }, settings.targetLorebook);
 
             // 새 벡터 추가
             newVectorEntries.push({
@@ -181,7 +194,11 @@ Ignore XML tags like <character_info>, <event_log> etc. when comparing — focus
     saveSettings();
 
     console.log(`${LOG_PREFIX} Organize complete: +${result.added} ~${result.updated} -${result.deactivated}`);
-    return result;
+    return {
+        ...result,
+        processedRange: [startIdx, endIdx],
+        processedIndices,
+    };
 }
 
 // ============================================================
@@ -208,7 +225,7 @@ export async function compress() {
     const tier1Entries = [];
     for (const [uid, entry] of Object.entries(data.entries || {})) {
         if (entry.disable) continue;
-        const meta = getMetadata(uid);
+        const meta = getMetadata(uid, settings.targetLorebook);
         if (!meta || meta.tier > 1) continue;
         tier1Entries.push({ uid, title: entry.comment || 'untitled', content: entry.content });
     }
@@ -274,12 +291,12 @@ Rules:
         const entry = data.entries?.[uid];
         if (!entry || entry.disable) continue;
 
-        const meta = getMetadata(uid);
+        const meta = getMetadata(uid, settings.targetLorebook);
         if (!meta) continue;
 
         // 원본 보존
         if (!meta.originalContent) {
-            setMetadata(uid, { originalContent: entry.content });
+            setMetadata(uid, { originalContent: entry.content }, settings.targetLorebook);
         }
 
         const targetRatio = targetTier === 2 ? settings.tier2TargetRatio : settings.tier3TargetRatio;
@@ -300,8 +317,8 @@ Rules:
             deleteHashes.push(getEntryHash(uid, entry.content));
 
             // 엔트리 업데이트
-            updateEntryContent(data, uid, compressedText);
-            setMetadata(uid, { tier: targetTier, lastUpdated: Date.now() });
+            updateEntryContent(data, uid, compressedText, settings.targetLorebook);
+            setMetadata(uid, { tier: targetTier, lastUpdated: Date.now() }, settings.targetLorebook);
 
             // 새 벡터
             newVectorEntries.push({

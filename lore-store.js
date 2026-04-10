@@ -60,6 +60,14 @@ export const DEFAULT_SETTINGS = {
     // position: 0=↑Char, 1=↓Char, 2=↑EM, 3=↓EM, 4=@D, 5=↑AN, 6=↓AN
     entryPosition: 1,
 
+    // 재구성 시 기존 엔트리 처리: 'hide' | 'delete'
+    reorganizeOldHandling: 'hide',
+
+    // 기억 정리 후 분석한 메시지 자동 하이드
+    hideAfterOrganize: true,
+    // 최근 N개 메시지는 하이드 제외 (0 = 전부 하이드)
+    hideAfterOrganizeDepth: 0,
+
     // 벡터 검색
     vectorTopK: 10,
     vectorThreshold: 0.3,
@@ -90,7 +98,7 @@ IMPORTANT RULES:
 
 Output a JSON array of entries. Each entry must have:
 - "title": short identifier
-- "content": detailed description (2-4 sentences)
+- "content": detailed description (as long as needed — do NOT artificially shorten)
 - "keywords": array of trigger keywords for this entry
 - "category": one of "location", "character" (NPCs only), "relationship", "routine", "item", "event", "fact"
 
@@ -135,7 +143,7 @@ Rules:
 - Do NOT add info already in the character card/persona or already in the lorebook.
 - Each entry = ONE specific thing (one event, one character change, one relationship shift, etc.)
 - Do NOT duplicate the same information across different categories. If something happened as an event, record it ONLY as an event — do not also create a separate character or relationship entry with the same info rephrased. Pick the single most fitting category.
-- Content: 2-5 sentences per entry. Preserve ALL details including violence, trauma, sensitive/adult content. Do NOT censor.
+- Content: Write as much as needed to capture ALL important details — do NOT artificially limit length. Preserve ALL details including violence, trauma, sensitive/adult content. Do NOT censor.
 - Output ONLY the JSON object, no other text.`,
 
     compressPrompt: `Compress the following lorebook entry to approximately {{targetRatio}}% of its current length.
@@ -183,6 +191,17 @@ export function initStore(context) {
         _settings.compressMaxTokens = DEFAULT_SETTINGS.compressMaxTokens;
     }
 
+    // Migration v2: 메타데이터 키 형식이 uid → lorebookName:uid 로 변경됨
+    // 기존 키가 숫자 형태면 (구 형식) 전부 삭제
+    if (_settings.entryMetadata && !_settings._metadataV2) {
+        const oldKeys = Object.keys(_settings.entryMetadata).filter(k => !k.includes(':'));
+        for (const k of oldKeys) {
+            delete _settings.entryMetadata[k];
+        }
+        _settings._metadataV2 = true;
+        console.log(`[LivingLorebook] Migrated ${oldKeys.length} old metadata entries`);
+    }
+
     return _settings;
 }
 
@@ -197,22 +216,31 @@ export function saveSettings() {
 
 // ============================================================
 // Entry Metadata (티어, 원본 보존 등)
+// 키 형식: `${lorebookName}:${uid}` — 로어북 간 uid 충돌 방지
 // ============================================================
 
-export function getMetadata(uid) {
-    return _settings.entryMetadata[uid] || null;
+function makeMetaKey(uid, lorebookName) {
+    const name = lorebookName ?? _settings.targetLorebook ?? '';
+    return `${name}:${uid}`;
 }
 
-export function setMetadata(uid, data) {
-    _settings.entryMetadata[uid] = {
-        ...(_settings.entryMetadata[uid] || {}),
+export function getMetadata(uid, lorebookName) {
+    const key = makeMetaKey(uid, lorebookName);
+    return _settings.entryMetadata[key] || null;
+}
+
+export function setMetadata(uid, data, lorebookName) {
+    const key = makeMetaKey(uid, lorebookName);
+    _settings.entryMetadata[key] = {
+        ...(_settings.entryMetadata[key] || {}),
         ...data,
     };
     saveSettings();
 }
 
-export function deleteMetadata(uid) {
-    delete _settings.entryMetadata[uid];
+export function deleteMetadata(uid, lorebookName) {
+    const key = makeMetaKey(uid, lorebookName);
+    delete _settings.entryMetadata[key];
     saveSettings();
 }
 
@@ -293,7 +321,7 @@ export async function createEntry(lorebookName, data, { title, content, keywords
     // Order: 카테고리별 범위 + 자동 증가
     const orderBase = CATEGORY_ORDER_BASE[category] ?? 7000;
     const sameCategoryCount = Object.values(data.entries || {}).filter(e => {
-        const m = getMetadata(e.uid ?? '');
+        const m = getMetadata(e.uid ?? '', lorebookName);
         return m?.category === category && !e.disable;
     }).length;
     entry.order = orderBase + sameCategoryCount;
@@ -312,7 +340,7 @@ export async function createEntry(lorebookName, data, { title, content, keywords
         lastUpdated: Date.now(),
         category: category || 'fact',
         keywords: Array.isArray(keywords) ? keywords : [title],
-    });
+    }, lorebookName);
 
     return entry;
 }
@@ -320,16 +348,16 @@ export async function createEntry(lorebookName, data, { title, content, keywords
 /**
  * 엔트리 내용 업데이트
  */
-export function updateEntryContent(data, uid, newContent) {
+export function updateEntryContent(data, uid, newContent, lorebookName) {
     const entries = data?.entries;
     if (!entries || !entries[uid]) return false;
 
     entries[uid].content = newContent;
     setWIOriginalDataValue(data, uid, 'content', newContent);
 
-    const meta = getMetadata(uid);
+    const meta = getMetadata(uid, lorebookName);
     if (meta) {
-        setMetadata(uid, { lastUpdated: Date.now() });
+        setMetadata(uid, { lastUpdated: Date.now() }, lorebookName);
     }
 
     return true;
@@ -344,6 +372,70 @@ export function deactivateEntry(data, uid) {
 
     entries[uid].disable = true;
     setWIOriginalDataValue(data, uid, 'disable', true);
+
+    return true;
+}
+
+/**
+ * 엔트리 재활성화
+ */
+export function enableEntry(data, uid) {
+    const entries = data?.entries;
+    if (!entries || !entries[uid]) return false;
+    entries[uid].disable = false;
+    setWIOriginalDataValue(data, uid, 'disable', false);
+    return true;
+}
+
+/**
+ * 엔트리 완전 삭제
+ */
+export function deleteEntry(data, uid, lorebookName) {
+    const entries = data?.entries;
+    if (!entries || !entries[uid]) return false;
+    delete entries[uid];
+    // originalData도 정리
+    if (data.originalData?.entries) {
+        data.originalData.entries = data.originalData.entries.filter(e => String(e.uid) !== String(uid));
+    }
+    deleteMetadata(uid, lorebookName);
+    return true;
+}
+
+/**
+ * 엔트리 필드 업데이트 (편집용)
+ */
+export function updateEntryFields(data, uid, { title, content, keywords, category }, lorebookName) {
+    const entries = data?.entries;
+    if (!entries || !entries[uid]) return false;
+
+    const entry = entries[uid];
+
+    if (title !== undefined) {
+        entry.comment = title;
+        setWIOriginalDataValue(data, uid, 'comment', title);
+    }
+
+    if (content !== undefined) {
+        // 카테고리 태그로 재래핑
+        const cat = category || getMetadata(uid, lorebookName)?.category || 'fact';
+        const tag = CATEGORY_TAGS[cat] || 'world_setting';
+        const wrappedContent = `<${tag}>\n[${title || entry.comment || 'untitled'}] ${content}\n</${tag}>`;
+        entry.content = wrappedContent;
+        setWIOriginalDataValue(data, uid, 'content', wrappedContent);
+    }
+
+    if (Array.isArray(keywords)) {
+        entry.key = keywords;
+        setWIOriginalDataValue(data, uid, 'key', keywords);
+    }
+
+    // 메타데이터 갱신
+    const metaUpdate = { lastUpdated: Date.now() };
+    if (category) metaUpdate.category = category;
+    if (Array.isArray(keywords)) metaUpdate.keywords = keywords;
+    if (content !== undefined) metaUpdate.originalContent = content;
+    setMetadata(uid, metaUpdate, lorebookName);
 
     return true;
 }

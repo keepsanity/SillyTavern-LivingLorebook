@@ -9,9 +9,9 @@ import { event_types } from '../../../events.js';
 import { saveSettingsDebounced, characters, this_chid, chat_metadata, saveMetadata } from '../../../../script.js';
 import { world_names, createNewWorldInfo } from '../../../world-info.js';
 import { power_user } from '../../../power-user.js';
-import { initStore, getSettings, saveSettings, loadTargetLorebook, calculateTierStats, getMetadata, DEFAULT_SETTINGS } from './lore-store.js';
+import { initStore, getSettings, saveSettings, loadTargetLorebook, calculateTierStats, getMetadata, DEFAULT_SETTINGS, updateEntryFields, enableEntry, deactivateEntry, deleteEntry, saveLorebook, refreshEditor } from './lore-store.js';
 import { initLLMService } from './llm-service.js';
-import { generateWorld, reorganizeExisting } from './world-builder.js';
+import { generateWorld, reorganizeExisting, suggestWorldEntries, generateFromSuggestions } from './world-builder.js';
 import { organize, compress } from './memory-manager.js';
 
 // ============================================================
@@ -83,6 +83,7 @@ async function init() {
     // Create floating trigger + panel
     createFloatingTrigger();
     createPanel();
+    createSuggestModal();
 
     // Add wand menu button (채팅방 확장 버튼)
     addWandMenuButton();
@@ -333,6 +334,31 @@ function createPanel() {
                     <option value="6">↓AN (작가노트 후)</option>
                 </select>
             </div>
+
+            <div class="ll-settings-section-title">
+                <i class="fa-solid fa-broom"></i> 기억 정리 후 동작
+            </div>
+            <div class="ll-settings-row">
+                <label>분석한 메시지 자동 하이드</label>
+                <input class="ll-settings-input" id="ll_s_hide_after" type="checkbox" style="width:auto;" />
+            </div>
+            <div class="ll-settings-row">
+                <label>최근 N개 메시지 유지</label>
+                <input class="ll-settings-input" id="ll_s_hide_depth" type="number" min="0" max="1000" />
+                <span class="ll-settings-unit" style="font-size:11px;opacity:0.6;">0=전부</span>
+            </div>
+
+            <div class="ll-settings-section-title">
+                <i class="fa-solid fa-arrows-rotate"></i> 재구성 시 기존 엔트리
+            </div>
+            <div class="ll-settings-row">
+                <label>처리 방식</label>
+                <select class="ll-settings-input" id="ll_s_reorg_handling">
+                    <option value="hide">하이드 (비활성화, 복구 가능)</option>
+                    <option value="delete">삭제 (완전 제거)</option>
+                </select>
+            </div>
+
             <div class="ll-settings-section-title">
                 <i class="fa-solid fa-magnifying-glass"></i> 벡터 검색
             </div>
@@ -405,6 +431,218 @@ function createPanel() {
     bindPanelEvents(panel);
 }
 
+// ============================================================
+// Suggest Modal
+// ============================================================
+
+let suggestState = {
+    suggestions: [],
+    userRequirements: '',
+    characterContext: '',
+};
+
+function createSuggestModal() {
+    if (document.querySelector('.ll-suggest-overlay')) return;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'll-suggest-overlay';
+    document.body.appendChild(overlay);
+
+    const modal = document.createElement('div');
+    modal.className = 'll-suggest-modal';
+    modal.innerHTML = `
+        <div class="ll-suggest-header">
+            <div class="ll-suggest-title">
+                <i class="fa-solid fa-wand-magic-sparkles"></i> 세계관 제안
+            </div>
+            <button class="ll-suggest-close" title="닫기">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+
+        <div class="ll-suggest-body">
+            <div class="ll-suggest-section">
+                <label class="ll-suggest-label">내가 넣고싶은 설정 (선택)</label>
+                <textarea class="ll-suggest-req" id="ll_suggest_req" rows="4"
+                    placeholder="예시: 주인공 집은 원룸이고, 친구는 한국계 2세야. 동네에 있는 카페 2개 정도 넣어줘..."></textarea>
+                <div class="ll-suggest-actions-top">
+                    <button class="ll-suggest-btn ll-suggest-btn-secondary" id="ll_suggest_regen">
+                        <i class="fa-solid fa-arrows-rotate"></i> 제안 받기 / 다시 받기
+                    </button>
+                </div>
+            </div>
+
+            <div class="ll-suggest-section">
+                <div class="ll-suggest-list-header">
+                    <label class="ll-suggest-label">제안된 엔트리</label>
+                    <div class="ll-suggest-list-controls">
+                        <button class="ll-suggest-mini-btn" id="ll_suggest_all">전체 선택</button>
+                        <button class="ll-suggest-mini-btn" id="ll_suggest_none">전체 해제</button>
+                    </div>
+                </div>
+                <div class="ll-suggest-list" id="ll_suggest_list">
+                    <div class="ll-suggest-empty">
+                        아직 제안이 없습니다. 위의 "제안 받기" 버튼을 눌러주세요.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="ll-suggest-footer">
+            <button class="ll-suggest-btn ll-suggest-btn-cancel" id="ll_suggest_cancel">취소</button>
+            <button class="ll-suggest-btn ll-suggest-btn-primary" id="ll_suggest_generate">
+                <i class="fa-solid fa-check"></i> 선택한 항목 생성
+            </button>
+        </div>
+    `;
+    document.body.appendChild(modal);
+
+    // Events
+    overlay.addEventListener('click', closeSuggestModal);
+    modal.querySelector('.ll-suggest-close').addEventListener('click', closeSuggestModal);
+    modal.querySelector('#ll_suggest_cancel').addEventListener('click', closeSuggestModal);
+
+    modal.querySelector('#ll_suggest_req').addEventListener('input', (e) => {
+        suggestState.userRequirements = e.target.value;
+    });
+
+    modal.querySelector('#ll_suggest_regen').addEventListener('click', handleSuggestRegenerate);
+    modal.querySelector('#ll_suggest_all').addEventListener('click', () => {
+        modal.querySelectorAll('.ll-suggest-item-check').forEach(cb => cb.checked = true);
+    });
+    modal.querySelector('#ll_suggest_none').addEventListener('click', () => {
+        modal.querySelectorAll('.ll-suggest-item-check').forEach(cb => cb.checked = false);
+    });
+    modal.querySelector('#ll_suggest_generate').addEventListener('click', handleSuggestGenerate);
+}
+
+function openSuggestModal() {
+    if (!settings.targetLorebook) {
+        toastr.warning('대상 로어북을 먼저 선택해주세요.');
+        return;
+    }
+    suggestState.suggestions = [];
+    suggestState.userRequirements = '';
+    suggestState.characterContext = getCharacterContext();
+
+    document.querySelector('.ll-suggest-overlay')?.classList.add('open');
+    document.querySelector('.ll-suggest-modal')?.classList.add('open');
+
+    const req = document.getElementById('ll_suggest_req');
+    if (req) req.value = '';
+    renderSuggestList();
+}
+
+function closeSuggestModal() {
+    document.querySelector('.ll-suggest-overlay')?.classList.remove('open');
+    document.querySelector('.ll-suggest-modal')?.classList.remove('open');
+}
+
+function renderSuggestList() {
+    const list = document.getElementById('ll_suggest_list');
+    if (!list) return;
+
+    if (suggestState.suggestions.length === 0) {
+        list.innerHTML = `<div class="ll-suggest-empty">아직 제안이 없습니다. 위의 "제안 받기" 버튼을 눌러주세요.</div>`;
+        return;
+    }
+
+    const catLabels = {
+        character: '캐릭터', relationship: '관계', location: '장소',
+        event: '사건', routine: '일상', item: '아이템', fact: '설정',
+    };
+
+    list.innerHTML = suggestState.suggestions.map((s, i) => `
+        <div class="ll-suggest-item" data-idx="${i}">
+            <label class="ll-suggest-item-head">
+                <input type="checkbox" class="ll-suggest-item-check" checked />
+                <select class="ll-suggest-item-cat">
+                    ${Object.entries(catLabels).map(([k, v]) =>
+                        `<option value="${k}"${s.category === k ? ' selected' : ''}>${v}</option>`,
+                    ).join('')}
+                </select>
+                <input type="text" class="ll-suggest-item-title" value="${escapeHtml(s.title || '')}" placeholder="제목" />
+            </label>
+            <div class="ll-suggest-item-reason">${escapeHtml(s.reason || '')}</div>
+            <textarea class="ll-suggest-item-draft" rows="2" placeholder="추가 메모 / 초안 (선택)">${escapeHtml(s.content || '')}</textarea>
+        </div>
+    `).join('');
+}
+
+async function handleSuggestRegenerate() {
+    const btn = document.getElementById('ll_suggest_regen');
+    const list = document.getElementById('ll_suggest_list');
+    if (!btn || !list) return;
+
+    // 현재 입력 수집
+    suggestState.userRequirements = document.getElementById('ll_suggest_req')?.value || '';
+
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 제안 생성 중...';
+    list.innerHTML = `<div class="ll-suggest-empty"><i class="fa-solid fa-spinner fa-spin"></i> AI 분석 중...</div>`;
+
+    try {
+        const suggestions = await suggestWorldEntries(
+            suggestState.characterContext,
+            suggestState.userRequirements,
+        );
+        suggestState.suggestions = suggestions;
+        renderSuggestList();
+        toastr.success(`${suggestions.length}개의 제안을 받았습니다.`);
+    } catch (err) {
+        console.error(`${LOG_PREFIX} Suggest failed:`, err);
+        toastr.error(err.message || '제안 받기에 실패했습니다.');
+        list.innerHTML = `<div class="ll-suggest-empty">제안 받기 실패. 다시 시도해주세요.</div>`;
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-arrows-rotate"></i> 제안 받기 / 다시 받기';
+    }
+}
+
+async function handleSuggestGenerate() {
+    const modal = document.querySelector('.ll-suggest-modal');
+    if (!modal) return;
+
+    // 선택된 항목들 수집 (인라인 편집 반영)
+    const items = [];
+    modal.querySelectorAll('.ll-suggest-item').forEach(el => {
+        const checked = el.querySelector('.ll-suggest-item-check')?.checked;
+        if (!checked) return;
+        items.push({
+            title: el.querySelector('.ll-suggest-item-title')?.value?.trim() || 'untitled',
+            category: el.querySelector('.ll-suggest-item-cat')?.value || 'fact',
+            content: el.querySelector('.ll-suggest-item-draft')?.value?.trim() || '',
+        });
+    });
+
+    if (items.length === 0) {
+        toastr.warning('선택된 항목이 없습니다.');
+        return;
+    }
+
+    const btn = document.getElementById('ll_suggest_generate');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 생성 중...';
+    }
+
+    try {
+        const userReq = document.getElementById('ll_suggest_req')?.value || '';
+        const created = await generateFromSuggestions(items, suggestState.characterContext, userReq);
+        toastr.success(`${created.length}개의 엔트리가 생성되었습니다.`);
+        closeSuggestModal();
+        refreshPanel();
+    } catch (err) {
+        console.error(`${LOG_PREFIX} Generate from suggestions failed:`, err);
+        toastr.error(err.message || '엔트리 생성에 실패했습니다.');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa-solid fa-check"></i> 선택한 항목 생성';
+        }
+    }
+}
+
 function bindPanelEvents(panel) {
     // Close
     panel.querySelector('.ll-btn-close').addEventListener('click', closePanel);
@@ -452,7 +690,29 @@ function bindSettingsInputs(panel) {
     };
 
     bind('#ll_s_position', 'entryPosition');
+    bind('#ll_s_hide_depth', 'hideAfterOrganizeDepth');
     bind('#ll_s_topk', 'vectorTopK');
+
+    // Checkbox bind (hideAfterOrganize)
+    const hideAfterEl = panel.querySelector('#ll_s_hide_after');
+    if (hideAfterEl) {
+        hideAfterEl.checked = !!settings.hideAfterOrganize;
+        hideAfterEl.addEventListener('change', () => {
+            settings.hideAfterOrganize = hideAfterEl.checked;
+            saveSettings();
+        });
+    }
+
+    // Select bind (reorganizeOldHandling)
+    const reorgEl = panel.querySelector('#ll_s_reorg_handling');
+    if (reorgEl) {
+        reorgEl.value = settings.reorganizeOldHandling || 'hide';
+        reorgEl.addEventListener('change', () => {
+            settings.reorganizeOldHandling = reorgEl.value;
+            saveSettings();
+        });
+    }
+
     bind('#ll_s_threshold', 'vectorThreshold', v => parseFloat(v) || 0.3);
     bind('#ll_s_tier2', 'tier2TargetRatio');
     bind('#ll_s_tier3', 'tier3TargetRatio');
@@ -637,9 +897,26 @@ async function renderTimeline() {
         grouped[cat] = [];
     }
 
+    // content의 XML 태그에서 카테고리 역추적
+    const TAG_TO_CATEGORY = {
+        character_info: 'character',
+        relationship_info: 'relationship',
+        location_info: 'location',
+        event_log: 'event',
+        routine_info: 'routine',
+        item_info: 'item',
+        world_setting: 'fact',
+    };
+
     for (const [uid, entry] of Object.entries(data.entries)) {
-        const meta = getMetadata(uid);
-        const category = meta?.category || 'fact';
+        const meta = getMetadata(uid, settings.targetLorebook);
+        // content 태그에서 카테고리 우선 판별 (로어북 간 uid 충돌 방지)
+        let category = meta?.category || 'fact';
+        const content = entry.content || '';
+        const tagMatch = content.match(/<(character_info|relationship_info|location_info|event_log|routine_info|item_info|world_setting)>/);
+        if (tagMatch) {
+            category = TAG_TO_CATEGORY[tagMatch[1]];
+        }
         const cat = CATEGORIES[category] ? category : 'fact';
 
         if (activeFilter !== 'all' && cat !== activeFilter) continue;
@@ -648,7 +925,7 @@ async function renderTimeline() {
             uid,
             title: entry.comment || 'untitled',
             content: entry.content || '',
-            keywords: meta?.keywords || entry.key || [],
+            keywords: Array.isArray(entry.key) && entry.key.length > 0 ? entry.key : (meta?.keywords || []),
             tier: meta?.tier || 1,
             disabled: !!entry.disable,
             createdAt: meta?.createdAt || 0,
@@ -682,12 +959,20 @@ async function renderTimeline() {
                 `<span class="ll-entry-keyword">${escapeHtml(k)}</span>`,
             ).join('');
 
+            // content에서 XML 태그 제거한 순수 본문 추출 (편집용)
+            const rawContent = (entry.content || '').replace(/<(character_info|relationship_info|location_info|event_log|routine_info|item_info|world_setting)>\s*(?:\[[^\]]*\]\s*)?/i, '').replace(/\s*<\/(character_info|relationship_info|location_info|event_log|routine_info|item_info|world_setting)>\s*$/i, '').trim();
+
             html += `
-                <div class="ll-entry-card${disabledClass}" data-uid="${entry.uid}">
-                    <div class="ll-entry-title">
-                        ${escapeHtml(entry.title)}
+                <div class="ll-entry-card${disabledClass}" data-uid="${entry.uid}" data-category="${cat}">
+                    <div class="ll-entry-header">
+                        <div class="ll-entry-title">${escapeHtml(entry.title)}${entry.disabled ? ' <span class="ll-entry-hide-badge">HIDE</span>' : ''}</div>
+                        <div class="ll-entry-actions">
+                            <button class="ll-entry-btn ll-entry-edit" title="편집"><i class="fa-solid fa-pen"></i></button>
+                            <button class="ll-entry-btn ll-entry-hide" title="${entry.disabled ? '재활성화' : '하이드'}"><i class="fa-solid fa-${entry.disabled ? 'eye-slash' : 'eye'}"></i></button>
+                            <button class="ll-entry-btn ll-entry-delete" title="삭제"><i class="fa-solid fa-trash"></i></button>
+                        </div>
                     </div>
-                    <div class="ll-entry-content">${escapeHtml(entry.content)}</div>
+                    <div class="ll-entry-content" data-raw="${escapeHtml(rawContent)}">${escapeHtml(rawContent)}</div>
                     ${keywordsHtml ? `<div class="ll-entry-keywords">${keywordsHtml}</div>` : ''}
                 </div>`;
         }
@@ -704,12 +989,170 @@ async function renderTimeline() {
     }
 
     container.innerHTML = html;
+
+    // 엔트리 카드 버튼 이벤트 바인딩
+    container.querySelectorAll('.ll-entry-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const card = btn.closest('.ll-entry-card');
+            const uid = card?.dataset?.uid;
+            if (!uid) return;
+
+            if (btn.classList.contains('ll-entry-edit')) {
+                openInlineEditor(card, uid);
+            } else if (btn.classList.contains('ll-entry-hide')) {
+                handleEntryHideToggle(uid);
+            } else if (btn.classList.contains('ll-entry-delete')) {
+                handleEntryDelete(uid);
+            }
+        });
+    });
 }
 
 function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+// ============================================================
+// Entry Edit / Hide / Delete
+// ============================================================
+
+const CATEGORY_LABELS = {
+    character: '캐릭터', relationship: '관계', location: '장소',
+    event: '사건', routine: '일상', item: '아이템', fact: '설정',
+};
+
+function openInlineEditor(card, uid) {
+    if (!card) return;
+    if (card.classList.contains('ll-editing')) return; // 이미 편집 중
+
+    const title = card.querySelector('.ll-entry-title')?.textContent.replace(/HIDE\s*$/, '').trim() || '';
+    const rawContent = card.querySelector('.ll-entry-content')?.dataset?.raw || '';
+    const currentCat = card.dataset.category || 'fact';
+    const currentKeywords = Array.from(card.querySelectorAll('.ll-entry-keyword')).map(el => el.textContent);
+
+    card.classList.add('ll-editing');
+
+    const editForm = document.createElement('div');
+    editForm.className = 'll-entry-edit-form';
+    editForm.innerHTML = `
+        <div class="ll-edit-row">
+            <label>제목</label>
+            <input type="text" class="ll-edit-title" value="${escapeHtml(title)}" />
+        </div>
+        <div class="ll-edit-row">
+            <label>카테고리</label>
+            <select class="ll-edit-cat">
+                ${Object.entries(CATEGORY_LABELS).map(([k, v]) =>
+                    `<option value="${k}"${currentCat === k ? ' selected' : ''}>${v}</option>`,
+                ).join('')}
+            </select>
+        </div>
+        <div class="ll-edit-row">
+            <label>내용</label>
+            <textarea class="ll-edit-content" rows="6">${escapeHtml(rawContent)}</textarea>
+        </div>
+        <div class="ll-edit-row">
+            <label>키워드 (쉼표 구분)</label>
+            <input type="text" class="ll-edit-keywords" value="${escapeHtml(currentKeywords.join(', '))}" />
+        </div>
+        <div class="ll-edit-actions">
+            <button class="ll-edit-cancel">취소</button>
+            <button class="ll-edit-save">저장</button>
+        </div>
+    `;
+
+    // 기존 컨텐츠/키워드/헤더 버튼 숨기기
+    card.querySelector('.ll-entry-content').style.display = 'none';
+    card.querySelector('.ll-entry-keywords')?.style.setProperty('display', 'none');
+    card.querySelector('.ll-entry-actions').style.display = 'none';
+    card.appendChild(editForm);
+
+    editForm.querySelector('.ll-edit-cancel').addEventListener('click', () => {
+        closeInlineEditor(card);
+    });
+    editForm.querySelector('.ll-edit-save').addEventListener('click', async () => {
+        await saveInlineEdit(card, uid, editForm);
+    });
+}
+
+function closeInlineEditor(card) {
+    card.classList.remove('ll-editing');
+    card.querySelector('.ll-entry-edit-form')?.remove();
+    card.querySelector('.ll-entry-content').style.display = '';
+    card.querySelector('.ll-entry-keywords')?.style.removeProperty('display');
+    card.querySelector('.ll-entry-actions').style.display = '';
+}
+
+async function saveInlineEdit(card, uid, form) {
+    const newTitle = form.querySelector('.ll-edit-title')?.value?.trim() || 'untitled';
+    const newContent = form.querySelector('.ll-edit-content')?.value?.trim() || '';
+    const newCat = form.querySelector('.ll-edit-cat')?.value || 'fact';
+    const keywordsRaw = form.querySelector('.ll-edit-keywords')?.value || '';
+    const newKeywords = keywordsRaw.split(',').map(k => k.trim()).filter(Boolean);
+
+    try {
+        const data = await loadTargetLorebook();
+        if (!data) throw new Error('로어북 로드 실패');
+
+        updateEntryFields(data, uid, {
+            title: newTitle,
+            content: newContent,
+            keywords: newKeywords,
+            category: newCat,
+        }, settings.targetLorebook);
+
+        await saveLorebook(settings.targetLorebook, data);
+        refreshEditor();
+        toastr.success('저장되었습니다.');
+        await renderTimeline();
+    } catch (err) {
+        console.error(`${LOG_PREFIX} Edit save failed:`, err);
+        toastr.error(err.message || '저장에 실패했습니다.');
+    }
+}
+
+async function handleEntryHideToggle(uid) {
+    try {
+        const data = await loadTargetLorebook();
+        if (!data?.entries?.[uid]) throw new Error('엔트리를 찾을 수 없습니다');
+
+        const entry = data.entries[uid];
+        if (entry.disable) {
+            enableEntry(data, uid);
+            toastr.info('재활성화되었습니다.');
+        } else {
+            deactivateEntry(data, uid);
+            toastr.info('하이드되었습니다.');
+        }
+
+        await saveLorebook(settings.targetLorebook, data);
+        refreshEditor();
+        await renderTimeline();
+    } catch (err) {
+        console.error(`${LOG_PREFIX} Hide toggle failed:`, err);
+        toastr.error(err.message || '처리에 실패했습니다.');
+    }
+}
+
+async function handleEntryDelete(uid) {
+    if (!confirm('이 엔트리를 완전히 삭제하시겠습니까? 되돌릴 수 없습니다.')) return;
+
+    try {
+        const data = await loadTargetLorebook();
+        if (!data?.entries?.[uid]) throw new Error('엔트리를 찾을 수 없습니다');
+
+        deleteEntry(data, uid, settings.targetLorebook);
+        await saveLorebook(settings.targetLorebook, data);
+        refreshEditor();
+        toastr.success('삭제되었습니다.');
+        await renderTimeline();
+    } catch (err) {
+        console.error(`${LOG_PREFIX} Delete failed:`, err);
+        toastr.error(err.message || '삭제에 실패했습니다.');
+    }
 }
 
 // ============================================================
@@ -768,9 +1211,8 @@ async function handleToolbarAction(action) {
 
     switch (action) {
         case 'build':
-            // Show world description input row
-            document.querySelector('.ll-world-input-row')?.classList.add('active');
-            document.querySelector('.ll-world-input')?.focus();
+            // 새 워크플로우: 제안 모달 열기
+            openSuggestModal();
             return;
 
         case 'build-confirm':
@@ -872,10 +1314,102 @@ async function handleOrganize() {
         return;
     }
 
+    // 범위 지정 팝업 띄우기
+    openOrganizeRangeModal(chat.length);
+}
+
+// ============================================================
+// Organize Range Modal
+// ============================================================
+
+function openOrganizeRangeModal(chatLength) {
+    // 이미 있으면 제거
+    document.querySelector('.ll-range-overlay')?.remove();
+    document.querySelector('.ll-range-modal')?.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'll-range-overlay open';
+
+    const modal = document.createElement('div');
+    modal.className = 'll-range-modal open';
+    modal.innerHTML = `
+        <div class="ll-range-header">
+            <div class="ll-range-title"><i class="fa-solid fa-broom"></i> 기억 정리 범위</div>
+            <button class="ll-range-close"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="ll-range-body">
+            <div class="ll-range-option">
+                <label class="ll-range-radio-label">
+                    <input type="radio" name="ll_range_mode" value="all" checked />
+                    <span>전체 대화 정리</span>
+                    <small>현재 채팅의 모든 메시지를 분석</small>
+                </label>
+            </div>
+            <div class="ll-range-option">
+                <label class="ll-range-radio-label">
+                    <input type="radio" name="ll_range_mode" value="range" />
+                    <span>범위 지정</span>
+                    <small>특정 메시지 ID 구간만 분석 (0 ~ ${chatLength - 1})</small>
+                </label>
+                <div class="ll-range-inputs">
+                    <input type="number" id="ll_range_start" min="0" max="${chatLength - 1}" placeholder="시작 ID" />
+                    <span>~</span>
+                    <input type="number" id="ll_range_end" min="0" max="${chatLength - 1}" placeholder="끝 ID" value="${chatLength - 1}" />
+                </div>
+            </div>
+            <div class="ll-range-hint">
+                * 메시지 ID는 채팅창의 메시지 번호 (0부터 시작)
+            </div>
+        </div>
+        <div class="ll-range-footer">
+            <button class="ll-range-btn ll-range-cancel">취소</button>
+            <button class="ll-range-btn ll-range-confirm">정리 실행</button>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+    document.body.appendChild(modal);
+
+    const close = () => {
+        overlay.remove();
+        modal.remove();
+    };
+
+    overlay.addEventListener('click', close);
+    modal.querySelector('.ll-range-close').addEventListener('click', close);
+    modal.querySelector('.ll-range-cancel').addEventListener('click', close);
+
+    // 범위 라디오 선택 시 입력 활성화
+    const rangeRadio = modal.querySelector('input[value="range"]');
+    const allRadio = modal.querySelector('input[value="all"]');
+    const inputs = modal.querySelector('.ll-range-inputs');
+
+    rangeRadio.addEventListener('change', () => inputs.classList.add('active'));
+    allRadio.addEventListener('change', () => inputs.classList.remove('active'));
+
+    modal.querySelector('.ll-range-confirm').addEventListener('click', () => {
+        const mode = modal.querySelector('input[name="ll_range_mode"]:checked')?.value;
+        let options = {};
+        if (mode === 'range') {
+            const start = parseInt(modal.querySelector('#ll_range_start')?.value, 10);
+            const end = parseInt(modal.querySelector('#ll_range_end')?.value, 10);
+            if (isNaN(start) || isNaN(end) || start > end) {
+                toastr.warning('유효한 범위를 입력해주세요.');
+                return;
+            }
+            options = { rangeStart: start, rangeEnd: end };
+        }
+        close();
+        runOrganize(options);
+    });
+}
+
+async function runOrganize(options = {}) {
+    const chat = context.chat || [];
     setToolbarProcessing(true, 'organize');
 
     try {
-        const result = await organize(chat, getCharacterContext());
+        const result = await organize(chat, getCharacterContext(), options);
         const parts = [];
         if (result.added > 0) parts.push(`추가 ${result.added}`);
         if (result.updated > 0) parts.push(`수정 ${result.updated}`);
@@ -885,6 +1419,37 @@ async function handleOrganize() {
             toastr.success(`정리 완료: ${parts.join(', ')}`);
         } else {
             toastr.info('변경사항이 없습니다.');
+        }
+
+        // 자동 하이드
+        if (settings.hideAfterOrganize && Array.isArray(result.processedIndices) && result.processedIndices.length > 0) {
+            try {
+                const { hideChatMessageRange } = await import('../../../chats.js');
+                const depth = Math.max(0, Number(settings.hideAfterOrganizeDepth) || 0);
+                // depth만큼 최근 메시지는 제외 (chat.length - 1 부터 depth개는 건드리지 않음)
+                const keepFromIdx = chat.length - depth;
+                const targetIndices = result.processedIndices.filter(i => i < keepFromIdx);
+
+                if (targetIndices.length > 0) {
+                    // 연속 구간 병합 후 hideChatMessageRange 호출
+                    targetIndices.sort((a, b) => a - b);
+                    let rangeStart = targetIndices[0];
+                    let prev = rangeStart;
+                    for (let i = 1; i < targetIndices.length; i++) {
+                        if (targetIndices[i] === prev + 1) {
+                            prev = targetIndices[i];
+                            continue;
+                        }
+                        await hideChatMessageRange(rangeStart, prev, false);
+                        rangeStart = targetIndices[i];
+                        prev = rangeStart;
+                    }
+                    await hideChatMessageRange(rangeStart, prev, false);
+                    toastr.info(`${targetIndices.length}개의 메시지가 하이드 처리되었습니다.`);
+                }
+            } catch (err) {
+                console.warn(`${LOG_PREFIX} Auto-hide failed:`, err);
+            }
         }
 
         await refreshPanel();
