@@ -442,13 +442,9 @@ let suggestState = {
 };
 
 function createSuggestModal() {
-    if (document.querySelector('.ll-suggest-overlay')) return;
+    if (document.querySelector('dialog.ll-suggest-modal')) return;
 
-    const overlay = document.createElement('div');
-    overlay.className = 'll-suggest-overlay';
-    document.body.appendChild(overlay);
-
-    const modal = document.createElement('div');
+    const modal = document.createElement('dialog');
     modal.className = 'll-suggest-modal';
     modal.innerHTML = `
         <div class="ll-suggest-header">
@@ -497,8 +493,8 @@ function createSuggestModal() {
     `;
     document.body.appendChild(modal);
 
-    // Events
-    overlay.addEventListener('click', closeSuggestModal);
+    // Events — click outside modal content (backdrop) closes it
+    modal.addEventListener('click', (e) => { if (e.target === modal) closeSuggestModal(); });
     modal.querySelector('.ll-suggest-close').addEventListener('click', closeSuggestModal);
     modal.querySelector('#ll_suggest_cancel').addEventListener('click', closeSuggestModal);
 
@@ -525,8 +521,8 @@ function openSuggestModal() {
     suggestState.userRequirements = '';
     suggestState.characterContext = getCharacterContext();
 
-    document.querySelector('.ll-suggest-overlay')?.classList.add('open');
-    document.querySelector('.ll-suggest-modal')?.classList.add('open');
+    const dlg = document.querySelector('dialog.ll-suggest-modal');
+    if (dlg && !dlg.open) dlg.showModal();
 
     const req = document.getElementById('ll_suggest_req');
     if (req) req.value = '';
@@ -534,8 +530,8 @@ function openSuggestModal() {
 }
 
 function closeSuggestModal() {
-    document.querySelector('.ll-suggest-overlay')?.classList.remove('open');
-    document.querySelector('.ll-suggest-modal')?.classList.remove('open');
+    const dlg = document.querySelector('dialog.ll-suggest-modal');
+    if (dlg?.open) dlg.close();
 }
 
 function renderSuggestList() {
@@ -1324,14 +1320,10 @@ async function handleOrganize() {
 
 function openOrganizeRangeModal(chatLength) {
     // 이미 있으면 제거
-    document.querySelector('.ll-range-overlay')?.remove();
-    document.querySelector('.ll-range-modal')?.remove();
+    document.querySelector('dialog.ll-range-modal')?.remove();
 
-    const overlay = document.createElement('div');
-    overlay.className = 'll-range-overlay open';
-
-    const modal = document.createElement('div');
-    modal.className = 'll-range-modal open';
+    const modal = document.createElement('dialog');
+    modal.className = 'll-range-modal';
     modal.innerHTML = `
         <div class="ll-range-header">
             <div class="ll-range-title"><i class="fa-solid fa-broom"></i> 기억 정리 범위</div>
@@ -1367,15 +1359,12 @@ function openOrganizeRangeModal(chatLength) {
         </div>
     `;
 
-    document.body.appendChild(overlay);
     document.body.appendChild(modal);
+    modal.showModal();
 
-    const close = () => {
-        overlay.remove();
-        modal.remove();
-    };
+    const close = () => { modal.close(); modal.remove(); };
 
-    overlay.addEventListener('click', close);
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
     modal.querySelector('.ll-range-close').addEventListener('click', close);
     modal.querySelector('.ll-range-cancel').addEventListener('click', close);
 

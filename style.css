@@ -931,35 +931,26 @@
    Suggest Modal (세계관 제안)
    ============================================================ */
 
-.ll-suggest-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    z-index: 31010;
-    display: none;
-    animation: ll-fade-in 0.2s ease;
-}
-.ll-suggest-overlay.open { display: block; }
-
-.ll-suggest-modal {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: min(640px, calc(100vw - 20px));
-    max-height: calc(100vh - 40px);
-    background: var(--SmartThemeBlurTintColor, rgba(20, 20, 30, 0.97));
+dialog.ll-suggest-modal {
+    padding: 0;
+    margin: auto;
     border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
     border-radius: 14px;
-    z-index: 31011;
-    display: none;
+    background: var(--SmartThemeBlurTintColor, rgba(20, 20, 30, 0.97));
+    width: min(640px, calc(100vw - 20px));
+    max-height: 90dvh;
+    display: flex;
     flex-direction: column;
     box-shadow: 0 20px 70px rgba(0, 0, 0, 0.6);
     backdrop-filter: blur(16px);
     overflow: hidden;
+    color: var(--SmartThemeBodyColor, #e8e8e8);
     animation: ll-panel-in 0.25s ease;
 }
-.ll-suggest-modal.open { display: flex; }
+dialog.ll-suggest-modal::backdrop {
+    background: rgba(0, 0, 0, 0.6);
+    animation: ll-fade-in 0.2s ease;
+}
 
 .ll-suggest-header {
     display: flex;
@@ -1207,16 +1198,6 @@
 
 /* 모바일 대응 */
 @media (max-width: 767px) {
-    .ll-suggest-modal {
-        width: 100vw;
-        height: 100vh;
-        max-height: 100vh;
-        top: 0;
-        left: 0;
-        transform: none;
-        border-radius: 0;
-        border: none;
-    }
     .ll-suggest-list {
         max-height: none;
     }
@@ -1226,33 +1207,25 @@
    Organize Range Modal
    ============================================================ */
 
-.ll-range-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    z-index: 31020;
-    display: none;
-}
-.ll-range-overlay.open { display: block; }
-
-.ll-range-modal {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: min(440px, calc(100vw - 20px));
-    background: var(--SmartThemeBlurTintColor, rgba(20, 20, 30, 0.97));
+dialog.ll-range-modal {
+    padding: 0;
+    margin: auto;
     border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
     border-radius: 14px;
-    z-index: 31021;
-    display: none;
+    background: var(--SmartThemeBlurTintColor, rgba(20, 20, 30, 0.97));
+    width: min(440px, calc(100vw - 20px));
+    max-height: 90dvh;
+    display: flex;
     flex-direction: column;
     box-shadow: 0 20px 70px rgba(0, 0, 0, 0.6);
     backdrop-filter: blur(16px);
     overflow: hidden;
+    color: var(--SmartThemeBodyColor, #e8e8e8);
     animation: ll-panel-in 0.2s ease;
 }
-.ll-range-modal.open { display: flex; }
+dialog.ll-range-modal::backdrop {
+    background: rgba(0, 0, 0, 0.6);
+}
 
 .ll-range-header {
     display: flex;
