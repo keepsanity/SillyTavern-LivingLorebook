@@ -77,8 +77,7 @@ export async function organize(chat, characterContext = '', options = {}) {
 
 CRITICAL: Before adding ANY new entry, check if similar information already exists in:
 1. The current lorebook entries below — if it does, use "update" (with existing uid), do NOT "add" a duplicate
-2. The character card/persona info below — if it's already there, do NOT add it at all
-Ignore XML tags like <character_info>, <event_log> etc. when comparing — focus on the actual content.${charInfoBlock}`;
+2. The character card/persona info below — if it's already there, do NOT add it at all${charInfoBlock}`;
     const userPrompt = settings.organizePrompt
         .replace('{{currentEntries}}', currentEntries.join('\n') || '(none)')
         .replace('{{conversation}}', conversationText);

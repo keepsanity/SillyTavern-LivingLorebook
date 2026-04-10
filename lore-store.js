@@ -289,11 +289,10 @@ export async function createEntry(lorebookName, data, { title, content, keywords
     entry.comment = title;
     setWIOriginalDataValue(data, uid, 'comment', title);
 
-    // Content: 카테고리 태그로 래핑 + 제목 포함
-    const tag = CATEGORY_TAGS[category] || 'world_setting';
-    const wrappedContent = `<${tag}>\n[${title}] ${content}\n</${tag}>`;
-    entry.content = wrappedContent;
-    setWIOriginalDataValue(data, uid, 'content', wrappedContent);
+    // Content: 제목 헤더 + 내용
+    const finalContent = `## ${title}\n${content}`;
+    entry.content = finalContent;
+    setWIOriginalDataValue(data, uid, 'content', finalContent);
 
     // Keywords — WI key에도 넣고, 벡터도 함께 사용
     const keyArray = Array.isArray(keywords) ? keywords : [title];
@@ -352,8 +351,10 @@ export function updateEntryContent(data, uid, newContent, lorebookName) {
     const entries = data?.entries;
     if (!entries || !entries[uid]) return false;
 
-    entries[uid].content = newContent;
-    setWIOriginalDataValue(data, uid, 'content', newContent);
+    const title = entries[uid].comment || 'untitled';
+    const finalContent = `## ${title}\n${newContent}`;
+    entries[uid].content = finalContent;
+    setWIOriginalDataValue(data, uid, 'content', finalContent);
 
     const meta = getMetadata(uid, lorebookName);
     if (meta) {
@@ -417,12 +418,10 @@ export function updateEntryFields(data, uid, { title, content, keywords, categor
     }
 
     if (content !== undefined) {
-        // 카테고리 태그로 재래핑
-        const cat = category || getMetadata(uid, lorebookName)?.category || 'fact';
-        const tag = CATEGORY_TAGS[cat] || 'world_setting';
-        const wrappedContent = `<${tag}>\n[${title || entry.comment || 'untitled'}] ${content}\n</${tag}>`;
-        entry.content = wrappedContent;
-        setWIOriginalDataValue(data, uid, 'content', wrappedContent);
+        const entryTitle = title !== undefined ? title : (entry.comment || 'untitled');
+        const finalContent = `## ${entryTitle}\n${content}`;
+        entry.content = finalContent;
+        setWIOriginalDataValue(data, uid, 'content', finalContent);
     }
 
     if (Array.isArray(keywords)) {
