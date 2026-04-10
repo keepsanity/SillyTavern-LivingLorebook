@@ -107,7 +107,7 @@ Output ONLY the JSON array, no other text.
 Description:
 {{description}}`,
 
-    organizePrompt: `You are a memory manager for a mature/adult roleplay session. Analyze the conversation thoroughly and extract ALL meaningful information. Be detailed and comprehensive — do NOT summarize or skip.
+    organizePrompt: `You are a memory manager for a mature/adult roleplay session. Extract key facts, events, and state changes from the conversation and store them as lorebook entries.
 
 Current lorebook entries (title → content):
 {{currentEntries}}
@@ -115,11 +115,11 @@ Current lorebook entries (title → content):
 Recent conversation to analyze:
 {{conversation}}
 
-Extract information for EACH of these categories. Do NOT skip any category:
+Categories to extract (only create entries for categories where something actually happened):
 
-1. **character** — Emotional/psychological changes, new traits revealed, reactions, habits discovered. When a character says something emotionally significant, QUOTE the dialogue directly (e.g., character said "...I'm not scared")
-2. **relationship** — Any change in how characters feel about each other: trust, affection, tension, conflict, intimacy, distance
-3. **location** — New places visited, changes to existing locations, details about rooms/buildings/areas
+1. **character** — Emotional/psychological changes, new traits revealed, reactions, habits discovered
+2. **relationship** — Changes in how characters feel about each other: trust, affection, tension, conflict, intimacy, distance
+3. **location** — New places visited, changes to existing locations, notable details about spaces
 4. **event** — Significant things that happened. Title MUST include RP date/time/day (e.g., "Day 3 afternoon - first outing")
 5. **routine** — Schedule changes, new habits, repeated behaviors
 6. **item** — Objects acquired, lost, used, gifted, or mentioned as significant
@@ -131,19 +131,13 @@ Output a JSON object with these fields:
 - "deactivate": array of entries no longer valid, each with { "uid", "title", "reason" }
 
 Rules:
-- Be THOROUGH. Capture the scene accurately without losing ANY important information.
-- For each entry's content: note the date/time if available, then write a detailed beat-by-beat record. Include:
-  • All important story beats and events
-  • Key interaction highlights and character developments
-  • Notable details, memorable quotes (DIRECTLY QUOTED), and revelations
-  • Significant physical actions, gestures, and body language
-  • Text messages, letters, notes, and other written media (quoted verbatim)
-  • Outcome and anything important for future interactions
-- Ignore all [OOC] conversation/interaction — only record in-character content.
-- Do NOT add info already in the character card/persona or already in the lorebook.
-- Each entry = ONE specific thing (one event, one character change, one relationship shift, etc.)
-- Do NOT duplicate the same information across different categories. If something happened as an event, record it ONLY as an event — do not also create a separate character or relationship entry with the same info rephrased. Pick the single most fitting category.
-- Content: Write as much as needed to capture ALL important details — do NOT artificially limit length. Preserve ALL details including violence, trauma, sensitive/adult content. Do NOT censor.
+- Write factual, clear prose — capture what happened, what changed, what was revealed
+- Include all important details: actions, reactions, outcomes, physical details, emotional states
+- Include dialogue when it carries meaning that prose can't convey; skip routine back-and-forth
+- Preserve all details including violence, trauma, sensitive/adult content. Do NOT censor
+- Ignore all [OOC] content — only record in-character events
+- Do NOT add info already in the character card/persona or already in the lorebook
+- Each entry = ONE specific thing. Do NOT duplicate across categories — pick the single best fit
 - Output ONLY the JSON object, no other text.`,
 
     compressPrompt: `Compress the following lorebook entry to approximately {{targetRatio}}% of its current length.
