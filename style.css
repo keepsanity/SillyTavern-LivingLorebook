@@ -577,6 +577,10 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-wrap: wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    min-width: 0;
 }
 
 .ll-entry-content {
@@ -629,7 +633,8 @@
 }
 
 .ll-entry-header .ll-entry-title {
-    flex: 1;
+    flex: 1 1 0;
+    min-width: 0;
     margin: 0;
 }
 
@@ -933,18 +938,19 @@
 
 dialog.ll-suggest-modal {
     padding: 0;
-    margin: auto;
     border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
     border-radius: 14px;
     background: var(--SmartThemeBlurTintColor, rgba(20, 20, 30, 0.97));
     width: min(640px, calc(100vw - 20px));
     max-height: 90dvh;
-    display: flex;
-    flex-direction: column;
     box-shadow: 0 20px 70px rgba(0, 0, 0, 0.6);
     backdrop-filter: blur(16px);
     overflow: hidden;
     color: var(--SmartThemeBodyColor, #e8e8e8);
+}
+dialog.ll-suggest-modal[open] {
+    display: flex;
+    flex-direction: column;
     animation: ll-panel-in 0.25s ease;
 }
 dialog.ll-suggest-modal::backdrop {
@@ -1209,18 +1215,19 @@ dialog.ll-suggest-modal::backdrop {
 
 dialog.ll-range-modal {
     padding: 0;
-    margin: auto;
     border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
     border-radius: 14px;
     background: var(--SmartThemeBlurTintColor, rgba(20, 20, 30, 0.97));
     width: min(440px, calc(100vw - 20px));
     max-height: 90dvh;
-    display: flex;
-    flex-direction: column;
     box-shadow: 0 20px 70px rgba(0, 0, 0, 0.6);
     backdrop-filter: blur(16px);
     overflow: hidden;
     color: var(--SmartThemeBodyColor, #e8e8e8);
+}
+dialog.ll-range-modal[open] {
+    display: flex;
+    flex-direction: column;
     animation: ll-panel-in 0.2s ease;
 }
 dialog.ll-range-modal::backdrop {

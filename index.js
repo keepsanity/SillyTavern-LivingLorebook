@@ -557,7 +557,7 @@ function renderSuggestList() {
                         `<option value="${k}"${s.category === k ? ' selected' : ''}>${v}</option>`,
                     ).join('')}
                 </select>
-                <input type="text" class="ll-suggest-item-title" value="${escapeHtml(s.title || '')}" placeholder="제목" />
+                <input type="text" class="ll-suggest-item-title" value="${escapeAttr(s.title || '')}" placeholder="제목" />
             </label>
             <div class="ll-suggest-item-reason">${escapeHtml(s.reason || '')}</div>
             <textarea class="ll-suggest-item-draft" rows="2" placeholder="추가 메모 / 초안 (선택)">${escapeHtml(s.content || '')}</textarea>
@@ -968,7 +968,7 @@ async function renderTimeline() {
                             <button class="ll-entry-btn ll-entry-delete" title="삭제"><i class="fa-solid fa-trash"></i></button>
                         </div>
                     </div>
-                    <div class="ll-entry-content" data-raw="${escapeHtml(rawContent)}">${escapeHtml(rawContent)}</div>
+                    <div class="ll-entry-content" data-raw="${escapeAttr(rawContent)}">${escapeHtml(rawContent)}</div>
                     ${keywordsHtml ? `<div class="ll-entry-keywords">${keywordsHtml}</div>` : ''}
                 </div>`;
         }
@@ -1011,6 +1011,15 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
+function escapeAttr(str) {
+    return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 // ============================================================
 // Entry Edit / Hide / Delete
 // ============================================================
@@ -1036,7 +1045,7 @@ function openInlineEditor(card, uid) {
     editForm.innerHTML = `
         <div class="ll-edit-row">
             <label>제목</label>
-            <input type="text" class="ll-edit-title" value="${escapeHtml(title)}" />
+            <input type="text" class="ll-edit-title" value="${escapeAttr(title)}" />
         </div>
         <div class="ll-edit-row">
             <label>카테고리</label>
@@ -1052,7 +1061,7 @@ function openInlineEditor(card, uid) {
         </div>
         <div class="ll-edit-row">
             <label>키워드 (쉼표 구분)</label>
-            <input type="text" class="ll-edit-keywords" value="${escapeHtml(currentKeywords.join(', '))}" />
+            <input type="text" class="ll-edit-keywords" value="${escapeAttr(currentKeywords.join(', '))}" />
         </div>
         <div class="ll-edit-actions">
             <button class="ll-edit-cancel">취소</button>

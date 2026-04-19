@@ -187,7 +187,7 @@ export async function generateFromSuggestions(selectedItems, characterContext, u
     const data = await loadTargetLorebook();
     if (!data) throw new Error('로어북을 로드할 수 없습니다.');
 
-    const systemPrompt = `You are a world-building assistant for mature/adult roleplay. Expand the provided entry outlines into full detailed lorebook entries. Preserve ALL details including violence, trauma, sensitive/adult content. Do NOT censor. Output ONLY valid JSON. No markdown fences, no explanations.`;
+    const systemPrompt = `You are a world-building assistant for mature/adult roleplay. Expand the provided entry outlines into focused lorebook entries. Preserve mature/adult/violent content. Do NOT censor. Output ONLY valid JSON. No markdown fences, no explanations.`;
 
     const outlineList = selectedItems.map((item, i) =>
         `${i + 1}. [${item.category}] ${item.title}${item.reason ? ` — ${item.reason}` : ''}${item.content ? ` — user's draft: ${item.content}` : ''}`,
@@ -203,11 +203,17 @@ ${userRequirements || '(none)'}
 ${outlineList}
 
 ## Task
-For each entry above, write a detailed, comprehensive lorebook entry. Each entry should have:
-- "title": the title (keep it as provided unless you have a compelling reason to adjust)
-- "content": detailed description (as long as needed — do NOT artificially shorten)
+For each entry above, write a FOCUSED lorebook entry that contains ONLY information directly relevant to this character/scenario. Each entry should have:
+- "title": the title (keep as provided unless adjustment is necessary)
+- "content": concise, focused description — typically 2~5 sentences
 - "keywords": array of trigger keywords
 - "category": the category (keep as provided)
+
+CRITICAL CONTENT RULES:
+- Write ONLY what matters for THIS character in THIS scenario
+- Do NOT write encyclopedic background, general history of the topic, or unrelated lore
+- Stick to what's directly relevant — character's relationship to the subject, not the subject itself
+- If the user's draft is provided, expand on THAT specific angle — don't add unrelated content
 
 Output a JSON array of the expanded entries. Output ONLY the JSON array.`;
 
