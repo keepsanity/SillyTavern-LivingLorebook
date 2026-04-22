@@ -546,6 +546,10 @@
     background: transparent;
     transition: all 0.15s ease;
     cursor: pointer;
+    min-width: 0;
+    overflow: hidden;
+    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .ll-entry-card:hover {

@@ -955,8 +955,13 @@ async function renderTimeline() {
                 `<span class="ll-entry-keyword">${escapeHtml(k)}</span>`,
             ).join('');
 
-            // content에서 XML 태그 제거한 순수 본문 추출 (편집용)
-            const rawContent = (entry.content || '').replace(/<(character_info|relationship_info|location_info|event_log|routine_info|item_info|world_setting)>\s*(?:\[[^\]]*\]\s*)?/i, '').replace(/\s*<\/(character_info|relationship_info|location_info|event_log|routine_info|item_info|world_setting)>\s*$/i, '').trim();
+            // content에서 XML 태그 + ## 제목 헤더 제거한 순수 본문 추출 (편집용)
+            let rawContent = (entry.content || '')
+                .replace(/<(character_info|relationship_info|location_info|event_log|routine_info|item_info|world_setting)>\s*(?:\[[^\]]*\]\s*)?/i, '')
+                .replace(/\s*<\/(character_info|relationship_info|location_info|event_log|routine_info|item_info|world_setting)>\s*$/i, '')
+                .trim();
+            // ## 제목 헤더 제거 (저장 시 자동으로 다시 붙음)
+            rawContent = rawContent.replace(/^##\s+.*\r?\n/, '').trim();
 
             html += `
                 <div class="ll-entry-card${disabledClass}" data-uid="${entry.uid}" data-category="${cat}">

@@ -205,15 +205,15 @@ ${outlineList}
 ## Task
 For each entry above, write a FOCUSED lorebook entry that contains ONLY information directly relevant to this character/scenario. Each entry should have:
 - "title": the title (keep as provided unless adjustment is necessary)
-- "content": concise, focused description — typically 2~5 sentences
+- "content": concise description, around 2~4 short sentences
 - "keywords": array of trigger keywords
 - "category": the category (keep as provided)
 
 CRITICAL CONTENT RULES:
-- Write ONLY what matters for THIS character in THIS scenario
-- Do NOT write encyclopedic background, general history of the topic, or unrelated lore
-- Stick to what's directly relevant — character's relationship to the subject, not the subject itself
-- If the user's draft is provided, expand on THAT specific angle — don't add unrelated content
+- Keep it SHORT. The content describes the subject's role in this character's life, not the subject itself.
+- Do NOT include general/encyclopedic background, history of the topic, origin stories, or how/why something came to be — unless that is itself the entry's topic.
+- Do NOT pad with tangential context. Cut anything not directly used in the scenario.
+- If the user's draft is provided, expand only on that specific angle.
 
 Output a JSON array of the expanded entries. Output ONLY the JSON array.`;
 
