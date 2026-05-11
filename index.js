@@ -524,14 +524,14 @@ function createPanel() {
             </div>
             <div class="ll-settings-row">
                 <label class="checkbox_label" style="flex:1;">
-                    <input id="ll_s_vec_prefilter_enabled" type="checkbox" />
-                    <span>Vector 1차 필터 사용 <span style="font-size:10px;opacity:0.6;">(100+엔트리 시 권장 — 인덱스 안정 후)</span></span>
+                    <input id="ll_s_bm25_prefilter_enabled" type="checkbox" />
+                    <span>BM25 텍스트 매칭 prefilter <span style="font-size:10px;opacity:0.6;">(권장 ON — vector 의존성 0, ~50ms)</span></span>
                 </label>
             </div>
             <div class="ll-settings-row">
-                <label>Vector 1차 필터 (후보)</label>
-                <input class="ll-settings-input" id="ll_s_vec_prefilter" type="number" min="5" max="500" />
-                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">활성화 시 후보 > K일 때만</span>
+                <label>BM25 prefilter Top-K</label>
+                <input class="ll-settings-input" id="ll_s_bm25_prefilter_k" type="number" min="5" max="500" />
+                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">후보 > K일 때만 작동</span>
             </div>
             <div class="ll-settings-row">
                 <label>채팅 스캔 깊이</label>
@@ -941,7 +941,7 @@ function bindSettingsInputs(panel) {
 
     // AI 선택 주입 설정 binding
     bind('#ll_s_ai_select_k', 'aiSelectK');
-    bind('#ll_s_vec_prefilter', 'vectorPrefilterK');
+    bind('#ll_s_bm25_prefilter_k', 'bm25PrefilterK');
 
     // Timeout 인풋 (초 ↔ ms)
     const timeoutEl = panel.querySelector('#ll_s_timeout_sec');
@@ -954,11 +954,11 @@ function bindSettingsInputs(panel) {
         });
     }
 
-    const vecPrefilterEnabledEl = panel.querySelector('#ll_s_vec_prefilter_enabled');
-    if (vecPrefilterEnabledEl) {
-        vecPrefilterEnabledEl.checked = !!settings.vectorPrefilterEnabled;
-        vecPrefilterEnabledEl.addEventListener('change', () => {
-            settings.vectorPrefilterEnabled = vecPrefilterEnabledEl.checked;
+    const bm25EnabledEl = panel.querySelector('#ll_s_bm25_prefilter_enabled');
+    if (bm25EnabledEl) {
+        bm25EnabledEl.checked = settings.bm25PrefilterEnabled !== false;
+        bm25EnabledEl.addEventListener('change', () => {
+            settings.bm25PrefilterEnabled = bm25EnabledEl.checked;
             saveSettings();
             clearSelectionCache();
         });

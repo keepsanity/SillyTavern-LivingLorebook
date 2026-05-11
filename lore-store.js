@@ -84,8 +84,11 @@ export const DEFAULT_SETTINGS = {
     // Summary 기반 AI 선택 (Phase 2)
     summarySelectionEnabled: false,    // 마스터 토글 (사용자가 명시적으로 켜야 함)
     aiSelectK: 8,                      // AI 최종 선택 개수
-    vectorPrefilterEnabled: false,     // vector 1차 필터 사용 여부 (100+엔트리 시 권장)
-    vectorPrefilterK: 30,              // vector 1차 필터 개수 (Enabled시 후보가 이보다 많을 때만)
+    bm25PrefilterEnabled: true,        // BM25 텍스트 매칭 prefilter (vector 대체) — 권장 기본 ON
+    bm25PrefilterK: 30,                // BM25 prefilter top-K (Enabled시 후보가 이보다 많을 때만)
+    // (deprecated) vectorPrefilter* — vector hash 매칭 불안정으로 BM25로 교체됨
+    vectorPrefilterEnabled: false,
+    vectorPrefilterK: 30,
     selectionScanDepth: 8,             // AI 선택용 채팅 컨텍스트 길이
     selectionCacheEnabled: true,       // 같은 채팅+manifest면 결과 재사용
     selectionInjectionDepth: 4,        // setExtensionPrompt 깊이

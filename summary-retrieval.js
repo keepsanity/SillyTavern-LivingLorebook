@@ -18,7 +18,8 @@ import {
     isManagedMode,
     countTokens,
 } from './lore-store.js';
-import { queryEntries, getCollectionId, getStringHash } from './vector-service.js';
+import { getStringHash } from './vector-service.js';
+import { buildBM25 } from './bm25.js';
 
 const LOG_PREFIX = '[LivingLorebook]';
 
@@ -183,50 +184,35 @@ async function _selectEntriesImpl(chat) {
     }).join('\n') || chatText;
 
     const aiSelectK = settings.aiSelectK || 8;
-    const vectorPrefilterK = settings.vectorPrefilterK || 30;
+    const prefilterK = settings.bm25PrefilterK || 30;
 
-    // 1차 필터: 멀티 컬렉션 vector query → union
-    // 명시적 토글 OFF면 완전 스킵 (vector hash 매칭 불안정 + 호출 시간 손해)
+    // 1차 필터: BM25 텍스트 매칭 — vector 인덱스 의존성 0, 매 호출 즉석 계산
+    // 토글 OFF면 완전 스킵
     let prefiltered = candidates;
     let prefilterStage = 'prefilter-disabled';
-    let vectorMs = 0;
-    if (settings.vectorPrefilterEnabled && candidates.length > vectorPrefilterK) {
-        const tVec = performance.now();
+    let bm25Ms = 0;
+    if (settings.bm25PrefilterEnabled && candidates.length > prefilterK) {
+        const tBm = performance.now();
         try {
-            const collectionsToQuery = [...new Set(candidates.map(c => c.lorebookName))];
-            const queryPromises = collectionsToQuery.map(lbName =>
-                queryEntries(getCollectionId(lbName), chatText, vectorPrefilterK, settings.vectorThreshold || 0.3)
-                    .then(res => ({ lbName, res }))
-                    .catch(err => {
-                        console.warn(`${LOG_PREFIX} Vector query failed for "${lbName}":`, err.message);
-                        return { lbName, res: null };
-                    }),
-            );
-            const results = await Promise.all(queryPromises);
-            vectorMs = performance.now() - tVec;
-
-            // 로어북별 hash set
-            const hashSetByLb = new Map();
-            for (const { lbName, res } of results) {
-                if (res?.hashes && res.hashes.length > 0) {
-                    hashSetByLb.set(lbName, new Set(res.hashes));
-                }
-            }
-
-            if (hashSetByLb.size > 0) {
-                const matched = candidates.filter(c => {
-                    const hashes = hashSetByLb.get(c.lorebookName);
-                    if (!hashes) return false;
-                    const expected = getStringHash(c.uid + '_' + c.content);
-                    return hashes.has(expected);
-                });
-                if (matched.length > 0) {
-                    prefiltered = matched;
-                    prefilterStage = `vector-prefilter (${matched.length}/${candidates.length}, ${hashSetByLb.size} collections)`;
-                }
+            const ranker = buildBM25(candidates, {
+                titleOf: c => c.title || '',
+                // title (가중치 ↑) + summary + keywords(meta) + content 첫 1500자
+                textOf: c => {
+                    const body = (c.content || '').slice(0, 1500);
+                    return `${c.title || ''} ${c.summary || ''} ${body}`;
+                },
+            });
+            const ranked = ranker.search(chatText, prefilterK);
+            bm25Ms = performance.now() - tBm;
+            if (ranked.length > 0) {
+                prefiltered = ranked.map(r => r.entry);
+                prefilterStage = `bm25 (${prefiltered.length}/${candidates.length})`;
+            } else {
+                // BM25 score 0 — chat에 매칭되는 단어 없음. 전체 후보 그대로
+                prefilterStage = `bm25-nomatch (using all ${candidates.length})`;
             }
         } catch (err) {
-            console.warn(`${LOG_PREFIX} Vector prefilter failed, using all candidates:`, err.message);
+            console.warn(`${LOG_PREFIX} BM25 prefilter failed, using all candidates:`, err.message);
         }
     }
 
@@ -391,6 +377,6 @@ Maximum ${aiSelectK} entries. Output ONLY the JSON object.`;
 
     const llmMs = performance.now() - tLlm;
     await measureAndStoreInjectionStats(selectedEntries, false);
-    console.log(`${LOG_PREFIX} Selection: ${selectedEntries.length} chosen from ${prefiltered.length} | vector ${vectorMs.toFixed(0)}ms · llm ${llmMs.toFixed(0)}ms | ${stage}, ${prefilterStage}, ${lorebooks.length} lorebook${lorebooks.length > 1 ? 's' : ''}`);
+    console.log(`${LOG_PREFIX} Selection: ${selectedEntries.length} chosen from ${prefiltered.length} | bm25 ${bm25Ms.toFixed(0)}ms · llm ${llmMs.toFixed(0)}ms | ${stage}, ${prefilterStage}, ${lorebooks.length} lorebook${lorebooks.length > 1 ? 's' : ''}`);
     return { entries: selectedEntries, fromCache: false, stage: `${stage} (${prefilterStage})` };
 }
