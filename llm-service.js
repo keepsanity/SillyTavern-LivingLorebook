@@ -14,10 +14,18 @@ export function initLLMService(context) {
 
 /**
  * Connection Profile 또는 메인 API로 LLM 호출
+ * @param {string} systemPrompt
+ * @param {string} userPrompt
+ * @param {number} maxTokens
+ * @param {object} settings
+ * @param {string} [profileIdOverride] - 비우거나 생략 시 settings.profileId 사용
  */
-export async function callLLM(systemPrompt, userPrompt, maxTokens, settings) {
-    if (settings.profileId && _context?.ConnectionManagerRequestService) {
-        return await callProfileAPI(systemPrompt, userPrompt, maxTokens, settings.profileId);
+export async function callLLM(systemPrompt, userPrompt, maxTokens, settings, profileIdOverride) {
+    const effectiveProfileId = profileIdOverride !== undefined && profileIdOverride !== null
+        ? profileIdOverride
+        : settings.profileId;
+    if (effectiveProfileId && _context?.ConnectionManagerRequestService) {
+        return await callProfileAPI(systemPrompt, userPrompt, maxTokens, effectiveProfileId);
     }
     return await callMainAPI(systemPrompt, userPrompt, maxTokens);
 }
@@ -60,6 +68,9 @@ async function callProfileAPI(systemPrompt, userPrompt, maxTokens, profileId) {
         text = response;
     } else if (response?.choices?.[0]?.message) {
         text = response.choices[0].message.content || '';
+    } else if (typeof response?.text === 'string') {
+        // Gemini / 일부 ST connection 형식 — { text: "..." }
+        text = response.text;
     } else {
         text = response?.content || response?.message || '';
     }

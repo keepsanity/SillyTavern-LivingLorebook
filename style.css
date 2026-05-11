@@ -352,6 +352,10 @@
 .ll-toolbar-btn.compress { color: #f6ad55; }
 .ll-toolbar-btn.compress:hover { background: rgba(246, 173, 85, 0.1); border-color: rgba(246, 173, 85, 0.3); color: #fbd38d; }
 
+/* Story Arc */
+.ll-toolbar-btn.arc { color: #b794f4; }
+.ll-toolbar-btn.arc:hover { background: rgba(183, 148, 244, 0.1); border-color: rgba(183, 148, 244, 0.3); color: #d6bcfa; }
+
 /* 재구성 */
 .ll-toolbar-btn.reorganize { color: #63b3ed; }
 .ll-toolbar-btn.reorganize:hover { background: rgba(99, 179, 237, 0.1); border-color: rgba(99, 179, 237, 0.3); color: #90cdf4; }
@@ -514,6 +518,10 @@
 }
 
 /* Category colors */
+.ll-cat-arc .ll-category-icon { background: rgba(252, 211, 77, 0.18); color: #fcd34d; }
+.ll-cat-arc .ll-category-label { color: #fcd34d; font-weight: bold; }
+.ll-cat-arc .ll-entry-card { border-left-width: 3px; border-left-color: #fcd34d; }
+
 .ll-cat-character .ll-category-icon { background: rgba(99, 179, 237, 0.15); color: #63b3ed; }
 .ll-cat-character .ll-category-label { color: #63b3ed; }
 
@@ -594,6 +602,31 @@
     opacity: 0.85;
 }
 
+.ll-entry-summary {
+    font-size: 11px;
+    line-height: 1.45;
+    margin: 4px 0 6px 0;
+    padding: 5px 8px;
+    border-left: 2px solid rgba(129, 230, 217, 0.5);
+    background: rgba(129, 230, 217, 0.06);
+    color: rgba(129, 230, 217, 0.95);
+    border-radius: 0 4px 4px 0;
+    word-break: break-word;
+}
+
+.ll-entry-summary i {
+    margin-right: 4px;
+    opacity: 0.7;
+    font-size: 10px;
+}
+
+.ll-entry-summary.ll-summary-missing {
+    border-left-color: rgba(245, 158, 11, 0.4);
+    background: rgba(245, 158, 11, 0.05);
+    color: rgba(245, 158, 11, 0.7);
+    font-style: italic;
+}
+
 .ll-entry-keywords {
     display: flex;
     gap: 4px;
@@ -613,6 +646,34 @@
 /* Disabled entry */
 .ll-entry-card.disabled {
     opacity: 0.4;
+}
+
+/* Pinned entry — 항상 inject */
+.ll-entry-card.ll-entry-pinned {
+    border-left: 3px solid #fbbf24;
+    background: rgba(251, 191, 36, 0.04);
+}
+
+.ll-entry-pin-badge {
+    display: inline-block;
+    color: #fbbf24;
+    font-size: 11px;
+    margin-left: 4px;
+}
+
+.ll-entry-pin {
+    color: var(--SmartThemeBodyColor, #aaa);
+    opacity: 0.5;
+    transition: opacity 0.15s, color 0.15s;
+}
+
+.ll-entry-pin:hover {
+    opacity: 1;
+}
+
+.ll-entry-pin.ll-entry-pin-on {
+    color: #fbbf24;
+    opacity: 1;
 }
 
 .ll-entry-hide-badge {
@@ -787,6 +848,41 @@
 .ll-status-item .ll-status-value {
     font-family: 'Consolas', 'Monaco', monospace;
     color: #81e6d9;
+}
+
+/* 클릭 가능한 칩 */
+.ll-stat-storage,
+.ll-stat-inject {
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: background 0.15s, opacity 0.15s;
+}
+
+.ll-stat-storage:hover,
+.ll-stat-inject:hover {
+    background: rgba(255, 255, 255, 0.06);
+    opacity: 1;
+}
+
+.ll-stat-storage i {
+    color: #a78bfa;
+}
+
+.ll-stat-inject i {
+    color: #fbbf24;
+}
+
+.ll-stat-inject .ll-status-value {
+    color: #fbbf24;
+}
+
+.ll-stat-storage .ll-status-value {
+    color: #a78bfa;
+}
+
+.ll-stat-ratio {
+    margin-left: 2px;
 }
 
 .ll-status-spacer {

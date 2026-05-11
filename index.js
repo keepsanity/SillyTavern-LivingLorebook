@@ -6,13 +6,14 @@
  */
 
 import { event_types } from '../../../events.js';
-import { saveSettingsDebounced, characters, this_chid, chat_metadata, saveMetadata } from '../../../../script.js';
+import { saveSettingsDebounced, characters, this_chid, chat_metadata, saveMetadata, setExtensionPrompt } from '../../../../script.js';
 import { world_names, createNewWorldInfo } from '../../../world-info.js';
 import { power_user } from '../../../power-user.js';
-import { initStore, getSettings, saveSettings, loadTargetLorebook, calculateTierStats, getMetadata, DEFAULT_SETTINGS, updateEntryFields, enableEntry, deactivateEntry, deleteEntry, saveLorebook, refreshEditor } from './lore-store.js';
+import { initStore, getSettings, saveSettings, loadTargetLorebook, loadAnyLorebook, calculateTierStats, calculateSelectionStorage, getMetadata, DEFAULT_SETTINGS, updateEntryFields, enableEntry, deactivateEntry, deleteEntry, setEntryPinned, saveLorebook, refreshEditor, migrateToManagedMode, getEffectiveSelectionLorebooks, isManagedMode } from './lore-store.js';
 import { initLLMService } from './llm-service.js';
 import { generateWorld, reorganizeExisting, suggestWorldEntries, generateFromSuggestions } from './world-builder.js';
-import { organize, compress } from './memory-manager.js';
+import { organize, compress, backfillSummaries, generateStoryArc } from './memory-manager.js';
+import { selectEntries, clearSelectionCache, getLastInjectionStats } from './summary-retrieval.js';
 
 // ============================================================
 // Constants
@@ -24,6 +25,7 @@ const TRIGGER_POS_KEY = 'll_trigger_pos';
 
 // Category config
 const CATEGORIES = {
+    arc:           { icon: 'fa-solid fa-book-bookmark',  label: '줄거리',   iconChar: '📖' },
     character:     { icon: 'fa-solid fa-user',           label: '캐릭터',   iconChar: '🧑' },
     relationship:  { icon: 'fa-solid fa-heart',          label: '관계',     iconChar: '💕' },
     location:      { icon: 'fa-solid fa-location-dot',   label: '장소',     iconChar: '📍' },
@@ -64,6 +66,30 @@ function setChatLorebook(lorebookName) {
     saveMetadata();
 }
 
+/**
+ * 현재 채팅의 selection 로어북 추가분 (targetLorebook 외 로어북들).
+ * targetLorebook은 항상 자동 포함됨 (lore-store 쪽에서 처리).
+ *
+ * 우선순위: chat_metadata → 글로벌 settings → []
+ * → chat_metadata에 없는 채팅에서도 글로벌 값으로 fallback (사용자 마지막 설정 유지)
+ */
+function getChatSelectionLorebooks() {
+    const arr = chat_metadata?.[METADATA_KEY]?.selectionLorebooks;
+    if (Array.isArray(arr)) return arr;
+    return Array.isArray(settings?.selectionLorebooks) ? settings.selectionLorebooks : [];
+}
+
+function setChatSelectionLorebooks(arr) {
+    if (!chat_metadata) return;
+    if (!chat_metadata[METADATA_KEY]) chat_metadata[METADATA_KEY] = {};
+    const cleaned = Array.isArray(arr) ? arr.filter(n => typeof n === 'string' && n.length > 0) : [];
+    chat_metadata[METADATA_KEY].selectionLorebooks = cleaned;
+    settings.selectionLorebooks = cleaned;
+    saveSettings();
+    saveMetadata();
+    clearSelectionCache();
+}
+
 // ============================================================
 // Init
 // ============================================================
@@ -76,6 +102,9 @@ async function init() {
     // Init modules
     settings = initStore(context);
     initLLMService(context);
+
+    // chat_metadata 복원 — 패널 만들기 전에 settings가 정확한 상태여야 카드 첫 렌더가 맞음
+    restoreChatMetadata();
 
     // Load sidebar settings
     await loadSidebarSettings();
@@ -93,6 +122,26 @@ async function init() {
     registerSlashCommands();
 
     console.log(`${LOG_PREFIX} Initialized`);
+}
+
+/**
+ * 현재 채팅의 LL 메타데이터 → settings 복원.
+ * init 시점, CHAT_CHANGED 시점 둘 다 호출.
+ *
+ * 정책: chat_metadata에 명시적 값이 있으면 그것 사용, 없으면 글로벌 settings 그대로 유지
+ * (덮어쓰지 않음 — 사용자가 다른 채팅에서 설정한 값 보존)
+ */
+function restoreChatMetadata() {
+    const stored = chat_metadata?.[METADATA_KEY];
+    if (!stored) return; // 글로벌 settings 그대로
+
+    if (typeof stored.targetLorebook === 'string') {
+        settings.targetLorebook = stored.targetLorebook;
+    }
+    if (Array.isArray(stored.selectionLorebooks)) {
+        settings.selectionLorebooks = [...stored.selectionLorebooks];
+    }
+    // stored.selectionLorebooks가 undefined면 글로벌 그대로 유지
 }
 
 // ============================================================
@@ -127,7 +176,7 @@ async function loadSidebarSettings() {
             refreshPanel();
         });
 
-    // Connection Profile
+    // Connection Profile (organize/compress/backfill)
     if (context.ConnectionManagerRequestService) {
         context.ConnectionManagerRequestService.handleDropdown(
             '.ll_settings .connection_profile',
@@ -137,6 +186,21 @@ async function loadSidebarSettings() {
                 saveSettings();
             },
         );
+
+        // Connection Profile (AI 선택 전용 — 비우면 organize용 fallback)
+        try {
+            context.ConnectionManagerRequestService.handleDropdown(
+                '.ll_settings .ll_selection_profile',
+                settings.selectionProfileId,
+                (profile) => {
+                    settings.selectionProfileId = profile?.id ?? '';
+                    saveSettings();
+                    clearSelectionCache();
+                },
+            );
+        } catch (err) {
+            console.warn(`${LOG_PREFIX} Selection profile dropdown init failed:`, err.message);
+        }
     }
 
     // 패널 열기 버튼
@@ -287,6 +351,9 @@ function createPanel() {
             <button class="ll-toolbar-btn compress" data-action="compress">
                 <i class="fa-solid fa-compress"></i> 압축
             </button>
+            <button class="ll-toolbar-btn arc" data-action="arc">
+                <i class="fa-solid fa-book-bookmark"></i> 줄거리 생성/업데이트
+            </button>
             <button class="ll-toolbar-btn reorganize" data-action="reorganize">
                 <i class="fa-solid fa-arrows-rotate"></i> 재구성
             </button>
@@ -306,6 +373,7 @@ function createPanel() {
         <!-- Filter bar -->
         <div class="ll-filter-bar">
             <button class="ll-filter-chip active" data-filter="all">전체</button>
+            <button class="ll-filter-chip" data-filter="arc"><i class="fa-solid fa-book-bookmark" style="margin-right:3px;font-size:10px;"></i>줄거리</button>
             <button class="ll-filter-chip" data-filter="character"><i class="fa-solid fa-user" style="margin-right:3px;font-size:10px;"></i>캐릭터</button>
             <button class="ll-filter-chip" data-filter="relationship"><i class="fa-solid fa-heart" style="margin-right:3px;font-size:10px;"></i>관계</button>
             <button class="ll-filter-chip" data-filter="location"><i class="fa-solid fa-location-dot" style="margin-right:3px;font-size:10px;"></i>장소</button>
@@ -386,6 +454,110 @@ function createPanel() {
             </div>
 
             <div class="ll-settings-section-title">
+                <i class="fa-solid fa-magnifying-glass-arrow-right"></i> Summary (검색 힌트)
+            </div>
+            <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:6px;">
+                <div style="font-size:11px;opacity:0.7;line-height:1.4;">
+                    엔트리마다 "언제 이 엔트리를 골라야 하는지" 한 줄 힌트를 저장합니다.
+                    기존 엔트리에 일괄 생성하려면 아래 버튼 클릭.
+                </div>
+                <button class="menu_button" id="ll_s_backfill_btn" style="width:unset;white-space:nowrap;">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> 기존 엔트리에 Summary 일괄 생성
+                </button>
+                <div id="ll_s_backfill_status" style="font-size:11px;opacity:0.7;"></div>
+            </div>
+
+            <div class="ll-settings-section-title">
+                <i class="fa-solid fa-link"></i> 자동 체인
+            </div>
+            <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:4px;">
+                <div style="font-size:11px;opacity:0.7;line-height:1.4;margin-bottom:4px;">
+                    기억 정리 / 재구성 끝나면 추가 작업 자동 실행. 매 호출에 LLM 1~2번 추가.
+                </div>
+                <label class="checkbox_label">
+                    <input id="ll_s_auto_backfill_organize" type="checkbox" />
+                    <span>기억 정리 후 자동 Summary 백필 <span style="font-size:10px;opacity:0.6;">(managed mode 한정, 새 entries만)</span></span>
+                </label>
+                <label class="checkbox_label">
+                    <input id="ll_s_auto_arc_organize" type="checkbox" />
+                    <span>기억 정리 후 자동 줄거리 업데이트 <span style="font-size:10px;opacity:0.6;">(기존 arc 있을 때만)</span></span>
+                </label>
+                <label class="checkbox_label">
+                    <input id="ll_s_auto_arc_reorganize" type="checkbox" />
+                    <span>재구성 후 자동 줄거리 업데이트 <span style="font-size:10px;opacity:0.6;">(기존 arc 있을 때만)</span></span>
+                </label>
+            </div>
+
+            <div class="ll-settings-section-title">
+                <i class="fa-solid fa-microscope"></i> AI 선택 주입
+            </div>
+            <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:6px;">
+                <div style="font-size:11px;opacity:0.7;line-height:1.4;">
+                    매 generation 직전 AI가 summary 보고 적절한 엔트리만 골라 주입.
+                    아래 <b>선택 소스 로어북</b>에서 통제할 로어북을 등록하고, 각 로어북마다 <b>managed mode 전환</b>을 눌러 ST 자동 활성화를 끕니다 (이중 주입 방지).
+                </div>
+            </div>
+
+            <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+                <div style="font-weight:bold;font-size:12px;">
+                    <i class="fa-solid fa-layer-group"></i> 선택 소스 로어북
+                </div>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <select class="ll-settings-input" id="ll_s_add_lorebook" style="flex:1;">
+                        <option value="">+ 추가할 로어북 선택...</option>
+                    </select>
+                    <button class="menu_button" id="ll_s_add_lorebook_btn" style="width:unset;white-space:nowrap;padding:4px 10px;">
+                        <i class="fa-solid fa-plus"></i> 추가
+                    </button>
+                </div>
+                <div id="ll_s_lorebook_list" style="display:flex;flex-direction:column;gap:6px;"></div>
+            </div>
+            <div class="ll-settings-row">
+                <label class="checkbox_label" style="flex:1;">
+                    <input id="ll_s_selection_enabled" type="checkbox" />
+                    <span>Summary 기반 AI 선택 사용</span>
+                </label>
+            </div>
+            <div class="ll-settings-row">
+                <label>AI 선택 결과 (top K)</label>
+                <input class="ll-settings-input" id="ll_s_ai_select_k" type="number" min="1" max="30" />
+            </div>
+            <div class="ll-settings-row">
+                <label class="checkbox_label" style="flex:1;">
+                    <input id="ll_s_vec_prefilter_enabled" type="checkbox" />
+                    <span>Vector 1차 필터 사용 <span style="font-size:10px;opacity:0.6;">(100+엔트리 시 권장 — 인덱스 안정 후)</span></span>
+                </label>
+            </div>
+            <div class="ll-settings-row">
+                <label>Vector 1차 필터 (후보)</label>
+                <input class="ll-settings-input" id="ll_s_vec_prefilter" type="number" min="5" max="500" />
+                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">활성화 시 후보 > K일 때만</span>
+            </div>
+            <div class="ll-settings-row">
+                <label>채팅 스캔 깊이</label>
+                <input class="ll-settings-input" id="ll_s_scan_depth" type="number" min="1" max="50" />
+                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">최근 N msg</span>
+            </div>
+            <div class="ll-settings-row">
+                <label>AI 선택 timeout (초)</label>
+                <input class="ll-settings-input" id="ll_s_timeout_sec" type="number" min="5" max="600" />
+                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">기본 120 — 이 시간 넘으면 폴백</span>
+            </div>
+            <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:4px;opacity:0.6;">
+                <div style="font-size:11px;line-height:1.4;">
+                    <i class="fa-solid fa-circle-info" style="color:#fbbf24;"></i>
+                    <b>주입 위치/깊이는 entry별 옵션 + ST 프리셋의 World Info 슬롯에 따름.</b>
+                    LL은 entry를 ST WI 시스템에 강제 활성화만 함. 위치 변경하려면 ST 월드 인포 에디터에서 entry의 position/depth 직접 수정하거나 프리셋의 WI 슬롯 위치 조정.
+                </div>
+            </div>
+            <div class="ll-settings-row">
+                <label class="checkbox_label" style="flex:1;">
+                    <input id="ll_s_cache_enabled" type="checkbox" />
+                    <span>선택 결과 캐싱 (스와이프/리젠 비용 0)</span>
+                </label>
+            </div>
+
+            <div class="ll-settings-section-title">
                 <i class="fa-solid fa-pen-fancy"></i> 프롬프트 커스터마이즈
             </div>
             <div style="display:flex;flex-direction:column;gap:4px;">
@@ -403,17 +575,29 @@ function createPanel() {
                 <textarea class="ll-settings-textarea" id="ll_s_compress_prompt" rows="3"></textarea>
                 <button class="ll-settings-reset-btn" data-reset="compressPrompt"><i class="fa-solid fa-rotate-left"></i> 초기화</button>
             </div>
+            <div style="display:flex;flex-direction:column;gap:4px;">
+                <label style="font-size:12px;">Summary 백필 프롬프트</label>
+                <textarea class="ll-settings-textarea" id="ll_s_summary_backfill_prompt" rows="3"></textarea>
+                <button class="ll-settings-reset-btn" data-reset="summaryBackfillPrompt"><i class="fa-solid fa-rotate-left"></i> 초기화</button>
+            </div>
         </div>
 
         <!-- Status Bar -->
         <div class="ll-status-bar">
-            <div class="ll-status-item">
+            <div class="ll-status-item" id="ll_stat_entries_box">
                 <i class="fa-solid fa-book"></i>
                 <span class="ll-status-value" id="ll_stat_entries">0</span>개
             </div>
-            <div class="ll-status-item">
-                <i class="fa-solid fa-coins"></i>
-                <span class="ll-status-value" id="ll_stat_tokens">0</span> 토큰
+            <div class="ll-status-item ll-stat-storage" id="ll_stat_storage_box" title="저장 토큰 (selection 로어북의 활성 엔트리 합) — 클릭하면 로어북별 breakdown">
+                <i class="fa-solid fa-database"></i>
+                <span style="font-size:10px;opacity:0.7;">저장</span>
+                <span class="ll-status-value" id="ll_stat_storage">0</span>
+            </div>
+            <div class="ll-status-item ll-stat-inject" id="ll_stat_inject_box" title="실제 주입 토큰 (마지막 generation 기준) — 클릭하면 breakdown">
+                <i class="fa-solid fa-arrow-down-to-bracket"></i>
+                <span style="font-size:10px;opacity:0.7;">주입</span>
+                <span class="ll-status-value" id="ll_stat_inject">—</span>
+                <span class="ll-stat-ratio" id="ll_stat_ratio" style="font-size:10px;opacity:0.6;"></span>
             </div>
             <div class="ll-status-item">
                 <i class="fa-solid fa-clock"></i>
@@ -670,6 +854,10 @@ function bindPanelEvents(panel) {
     // Refresh
     panel.querySelector('.ll-btn-refresh').addEventListener('click', () => refreshPanel());
 
+    // Storage / Inject 칩 클릭 → breakdown 토스트
+    panel.querySelector('#ll_stat_storage_box')?.addEventListener('click', showStorageBreakdown);
+    panel.querySelector('#ll_stat_inject_box')?.addEventListener('click', showInjectBreakdown);
+
     // Settings inputs
     bindSettingsInputs(panel);
 }
@@ -727,6 +915,117 @@ function bindSettingsInputs(panel) {
     bindTextarea('#ll_s_world_prompt', 'worldBuildPrompt');
     bindTextarea('#ll_s_organize_prompt', 'organizePrompt');
     bindTextarea('#ll_s_compress_prompt', 'compressPrompt');
+    bindTextarea('#ll_s_summary_backfill_prompt', 'summaryBackfillPrompt');
+
+    // Backfill 버튼
+    const backfillBtn = panel.querySelector('#ll_s_backfill_btn');
+    const backfillStatus = panel.querySelector('#ll_s_backfill_status');
+    if (backfillBtn) {
+        backfillBtn.addEventListener('click', () => handleBackfillSummaries(backfillBtn, backfillStatus));
+    }
+
+    // 자동 체인 토글 3개
+    [
+        ['#ll_s_auto_backfill_organize', 'autoBackfillOnOrganize'],
+        ['#ll_s_auto_arc_organize', 'autoArcOnOrganize'],
+        ['#ll_s_auto_arc_reorganize', 'autoArcOnReorganize'],
+    ].forEach(([sel, key]) => {
+        const el = panel.querySelector(sel);
+        if (!el) return;
+        el.checked = settings[key] !== false;
+        el.addEventListener('change', () => {
+            settings[key] = el.checked;
+            saveSettings();
+        });
+    });
+
+    // AI 선택 주입 설정 binding
+    bind('#ll_s_ai_select_k', 'aiSelectK');
+    bind('#ll_s_vec_prefilter', 'vectorPrefilterK');
+
+    // Timeout 인풋 (초 ↔ ms)
+    const timeoutEl = panel.querySelector('#ll_s_timeout_sec');
+    if (timeoutEl) {
+        timeoutEl.value = String(Math.round((settings.selectionTimeoutMs || 120000) / 1000));
+        timeoutEl.addEventListener('change', () => {
+            const sec = Math.max(5, Math.min(600, Number(timeoutEl.value) || 120));
+            settings.selectionTimeoutMs = sec * 1000;
+            saveSettings();
+        });
+    }
+
+    const vecPrefilterEnabledEl = panel.querySelector('#ll_s_vec_prefilter_enabled');
+    if (vecPrefilterEnabledEl) {
+        vecPrefilterEnabledEl.checked = !!settings.vectorPrefilterEnabled;
+        vecPrefilterEnabledEl.addEventListener('change', () => {
+            settings.vectorPrefilterEnabled = vecPrefilterEnabledEl.checked;
+            saveSettings();
+            clearSelectionCache();
+        });
+    }
+    bind('#ll_s_scan_depth', 'selectionScanDepth');
+    // 주입 깊이/역할 입력은 제거됨 (WORLDINFO_FORCE_ACTIVATE로 변경 후 entry별 옵션 + ST WI 슬롯 사용)
+
+    const selectionEnabledEl = panel.querySelector('#ll_s_selection_enabled');
+    if (selectionEnabledEl) {
+        selectionEnabledEl.checked = !!settings.summarySelectionEnabled;
+        selectionEnabledEl.addEventListener('change', () => {
+            if (selectionEnabledEl.checked) {
+                const lbs = getEffectiveSelectionLorebooks();
+                const anyManaged = lbs.some(name => isManagedMode(name));
+                if (!anyManaged) {
+                    toastr.warning('먼저 어떤 로어북이든 하나는 "managed 전환"을 실행해주세요. 안 그러면 우리 모듈이 주입할 후보가 없습니다.');
+                    selectionEnabledEl.checked = false;
+                    return;
+                }
+            }
+            settings.summarySelectionEnabled = selectionEnabledEl.checked;
+            saveSettings();
+            clearSelectionCache();
+            toastr.info(`AI 선택 주입: ${settings.summarySelectionEnabled ? 'ON' : 'OFF'}`);
+        });
+    }
+
+    const cacheEnabledEl = panel.querySelector('#ll_s_cache_enabled');
+    if (cacheEnabledEl) {
+        cacheEnabledEl.checked = settings.selectionCacheEnabled !== false;
+        cacheEnabledEl.addEventListener('change', () => {
+            settings.selectionCacheEnabled = cacheEnabledEl.checked;
+            saveSettings();
+            if (!cacheEnabledEl.checked) clearSelectionCache();
+        });
+    }
+
+    // 선택 소스 로어북 추가/카드 리스트 렌더
+    renderSelectionLorebookList(panel);
+    populateAddLorebookDropdown(panel);
+    const addBtn = panel.querySelector('#ll_s_add_lorebook_btn');
+    const addSelect = panel.querySelector('#ll_s_add_lorebook');
+    if (addBtn && addSelect) {
+        addBtn.addEventListener('click', () => {
+            const val = addSelect.value;
+            if (!val) {
+                toastr.warning('추가할 로어북을 선택해주세요.');
+                return;
+            }
+            // chat_metadata 우선 (settings는 stale일 수 있음)
+            const current = getChatSelectionLorebooks();
+            if (val === settings.targetLorebook) {
+                toastr.info(`"${val}"은 이미 target 로어북입니다 (자동 포함).`);
+                populateAddLorebookDropdown(panel); // 옛날 옵션 정리
+                return;
+            }
+            if (current.includes(val)) {
+                toastr.info(`"${val}"은 이미 selection 리스트에 있습니다.`);
+                populateAddLorebookDropdown(panel);
+                return;
+            }
+            setChatSelectionLorebooks([...current, val]);
+            renderSelectionLorebookList(panel);
+            populateAddLorebookDropdown(panel);
+            toastr.success(`"${val}" 추가됨`);
+        });
+    }
 
     // Reset buttons
     panel.querySelectorAll('.ll-settings-reset-btn[data-reset]').forEach(btn => {
@@ -739,6 +1038,7 @@ function bindSettingsInputs(panel) {
                 worldBuildPrompt: '#ll_s_world_prompt',
                 organizePrompt: '#ll_s_organize_prompt',
                 compressPrompt: '#ll_s_compress_prompt',
+                summaryBackfillPrompt: '#ll_s_summary_backfill_prompt',
             };
             const ta = panel.querySelector(textareaMap[key]);
             if (ta) ta.value = settings[key];
@@ -895,6 +1195,7 @@ async function renderTimeline() {
 
     // content의 XML 태그에서 카테고리 역추적
     const TAG_TO_CATEGORY = {
+        story_arc: 'arc',
         character_info: 'character',
         relationship_info: 'relationship',
         location_info: 'location',
@@ -909,7 +1210,7 @@ async function renderTimeline() {
         // content 태그에서 카테고리 우선 판별 (로어북 간 uid 충돌 방지)
         let category = meta?.category || 'fact';
         const content = entry.content || '';
-        const tagMatch = content.match(/<(character_info|relationship_info|location_info|event_log|routine_info|item_info|world_setting)>/);
+        const tagMatch = content.match(/<(story_arc|character_info|relationship_info|location_info|event_log|routine_info|item_info|world_setting)>/);
         if (tagMatch) {
             category = TAG_TO_CATEGORY[tagMatch[1]];
         }
@@ -924,8 +1225,10 @@ async function renderTimeline() {
             keywords: Array.isArray(entry.key) && entry.key.length > 0 ? entry.key : (meta?.keywords || []),
             tier: meta?.tier || 1,
             disabled: !!entry.disable,
+            pinned: !!entry.constant,
             createdAt: meta?.createdAt || 0,
             lastUpdated: meta?.lastUpdated,
+            summary: meta?.summary || '',
         });
     }
 
@@ -963,16 +1266,20 @@ async function renderTimeline() {
             // ## 제목 헤더 제거 (저장 시 자동으로 다시 붙음)
             rawContent = rawContent.replace(/^##\s+.*\r?\n/, '').trim();
 
+            const pinnedClass = entry.pinned ? ' ll-entry-pinned' : '';
+            const pinBadge = entry.pinned ? ' <span class="ll-entry-pin-badge" title="핀됨 — 항상 inject"><i class="fa-solid fa-thumbtack"></i></span>' : '';
             html += `
-                <div class="ll-entry-card${disabledClass}" data-uid="${entry.uid}" data-category="${cat}">
+                <div class="ll-entry-card${disabledClass}${pinnedClass}" data-uid="${entry.uid}" data-category="${cat}" data-pinned="${entry.pinned ? '1' : '0'}">
                     <div class="ll-entry-header">
-                        <div class="ll-entry-title">${escapeHtml(entry.title)}${entry.disabled ? ' <span class="ll-entry-hide-badge">HIDE</span>' : ''}</div>
+                        <div class="ll-entry-title">${escapeHtml(entry.title)}${pinBadge}${entry.disabled ? ' <span class="ll-entry-hide-badge">HIDE</span>' : ''}</div>
                         <div class="ll-entry-actions">
+                            <button class="ll-entry-btn ll-entry-pin${entry.pinned ? ' ll-entry-pin-on' : ''}" title="${entry.pinned ? '핀 해제' : '핀 (항상 inject)'}"><i class="fa-solid fa-thumbtack"></i></button>
                             <button class="ll-entry-btn ll-entry-edit" title="편집"><i class="fa-solid fa-pen"></i></button>
                             <button class="ll-entry-btn ll-entry-hide" title="${entry.disabled ? '재활성화' : '하이드'}"><i class="fa-solid fa-${entry.disabled ? 'eye-slash' : 'eye'}"></i></button>
                             <button class="ll-entry-btn ll-entry-delete" title="삭제"><i class="fa-solid fa-trash"></i></button>
                         </div>
                     </div>
+                    ${entry.summary ? `<div class="ll-entry-summary" title="검색 힌트 (AI 선택용)"><i class="fa-solid fa-magnifying-glass-arrow-right"></i> ${escapeHtml(entry.summary)}</div>` : '<div class="ll-entry-summary ll-summary-missing" title="아직 summary가 없습니다. 설정 > Summary 일괄 생성 버튼을 눌러주세요."><i class="fa-solid fa-circle-exclamation"></i> summary 없음</div>'}
                     <div class="ll-entry-content" data-raw="${escapeAttr(rawContent)}">${escapeHtml(rawContent)}</div>
                     ${keywordsHtml ? `<div class="ll-entry-keywords">${keywordsHtml}</div>` : ''}
                 </div>`;
@@ -999,7 +1306,10 @@ async function renderTimeline() {
             const uid = card?.dataset?.uid;
             if (!uid) return;
 
-            if (btn.classList.contains('ll-entry-edit')) {
+            if (btn.classList.contains('ll-entry-pin')) {
+                const currentlyPinned = card?.dataset?.pinned === '1';
+                handleEntryPinToggle(uid, !currentlyPinned);
+            } else if (btn.classList.contains('ll-entry-edit')) {
                 openInlineEditor(card, uid);
             } else if (btn.classList.contains('ll-entry-hide')) {
                 handleEntryHideToggle(uid);
@@ -1147,6 +1457,23 @@ async function handleEntryHideToggle(uid) {
     }
 }
 
+async function handleEntryPinToggle(uid, pinned) {
+    try {
+        const data = await loadTargetLorebook();
+        if (!data?.entries?.[uid]) throw new Error('엔트리를 찾을 수 없습니다');
+
+        setEntryPinned(data, uid, pinned);
+        await saveLorebook(settings.targetLorebook, data);
+        refreshEditor();
+        clearSelectionCache();
+        await renderTimeline();
+        toastr.info(pinned ? '📌 핀됨 — 항상 inject됩니다.' : '핀 해제됨.');
+    } catch (err) {
+        console.error(`${LOG_PREFIX} Pin toggle failed:`, err);
+        toastr.error(err.message || '처리에 실패했습니다.');
+    }
+}
+
 async function handleEntryDelete(uid) {
     if (!confirm('이 엔트리를 완전히 삭제하시겠습니까? 되돌릴 수 없습니다.')) return;
 
@@ -1176,6 +1503,42 @@ async function refreshPanel() {
     await updateStatusBar();
 }
 
+/**
+ * 주입 칩만 즉시 갱신 — selectEntries 끝날 때마다 호출 (값은 메모리에 이미 있음).
+ */
+function refreshInjectChip() {
+    const inj = getLastInjectionStats();
+    const injEl = document.getElementById('ll_stat_inject');
+    const ratioEl = document.getElementById('ll_stat_ratio');
+    if (!injEl) return;
+
+    if (!settings.summarySelectionEnabled) {
+        injEl.textContent = '—';
+        if (ratioEl) ratioEl.textContent = '(off)';
+        return;
+    }
+
+    if (inj.entryCount === 0) {
+        injEl.textContent = '0';
+        if (ratioEl) ratioEl.textContent = '';
+        return;
+    }
+
+    injEl.textContent = inj.totalTokens.toLocaleString();
+    if (ratioEl) {
+        // 저장 토큰을 알면 비율 표시
+        const storageEl = document.getElementById('ll_stat_storage');
+        const storageVal = storageEl ? Number(storageEl.dataset.raw || 0) : 0;
+        if (storageVal > 0) {
+            const pct = Math.round((inj.totalTokens / storageVal) * 100);
+            ratioEl.textContent = `(${pct}%)`;
+            ratioEl.style.color = pct < 30 ? '#10b981' : pct < 60 ? '#fbbf24' : '#f87171';
+        } else {
+            ratioEl.textContent = '';
+        }
+    }
+}
+
 async function updateStatusBar() {
     // Unprocessed messages
     const chat = context?.chat || [];
@@ -1189,27 +1552,70 @@ async function updateStatusBar() {
     const trigger = document.querySelector('.ll-float-trigger');
     if (trigger) trigger.setAttribute('data-count', String(unprocessed));
 
-    // Entry count & tokens
+    // Inject chip 즉시 갱신 (캐시된 값)
+    refreshInjectChip();
+
+    // Storage chip — 멀티 로어북, 비용 큼
+    const entriesEl = document.getElementById('ll_stat_entries');
+    const storageEl = document.getElementById('ll_stat_storage');
     if (!settings.targetLorebook) {
-        const entriesEl = document.getElementById('ll_stat_entries');
-        const tokensEl = document.getElementById('ll_stat_tokens');
         if (entriesEl) entriesEl.textContent = '0';
-        if (tokensEl) tokensEl.textContent = '0';
+        if (storageEl) {
+            storageEl.textContent = '0';
+            storageEl.dataset.raw = '0';
+        }
         return;
     }
 
     try {
-        const data = await loadTargetLorebook();
-        if (!data) return;
-
-        const stats = await calculateTierStats(data);
-        const entriesEl = document.getElementById('ll_stat_entries');
-        const tokensEl = document.getElementById('ll_stat_tokens');
+        if (storageEl) storageEl.textContent = '...';
+        const stats = await calculateSelectionStorage();
         if (entriesEl) entriesEl.textContent = String(stats.total.count);
-        if (tokensEl) tokensEl.textContent = stats.total.tokens.toLocaleString();
+        if (storageEl) {
+            storageEl.textContent = stats.total.tokens.toLocaleString();
+            storageEl.dataset.raw = String(stats.total.tokens);
+        }
+        // storage 갱신 후 inject chip의 비율 다시 계산
+        refreshInjectChip();
     } catch (err) {
         console.warn(`${LOG_PREFIX} Stats refresh failed:`, err);
+        if (storageEl) storageEl.textContent = '?';
     }
+}
+
+/**
+ * 칩 클릭 시 breakdown 토스트.
+ */
+function showStorageBreakdown() {
+    const lorebooks = getEffectiveSelectionLorebooks();
+    if (lorebooks.length === 0) {
+        toastr.info('등록된 selection 로어북이 없습니다.');
+        return;
+    }
+    calculateSelectionStorage().then(stats => {
+        const lines = lorebooks.map(name => {
+            const s = stats.perLorebook[name] || { count: 0, tokens: 0, managed: false };
+            const tag = s.managed ? '🟢' : '🟡';
+            return `${tag} ${name}: ${s.count}개 / ${s.tokens.toLocaleString()} 토큰`;
+        });
+        toastr.info(lines.join('<br>') + `<br><b>총 ${stats.total.count}개 / ${stats.total.tokens.toLocaleString()} 토큰</b>`,
+            '저장 토큰 breakdown', { escapeHtml: false, timeOut: 8000 });
+    });
+}
+
+function showInjectBreakdown() {
+    const inj = getLastInjectionStats();
+    if (inj.entryCount === 0) {
+        toastr.info('아직 주입된 엔트리가 없습니다 (또는 AI 선택 OFF).');
+        return;
+    }
+    const lines = Object.entries(inj.perLorebook).map(([name, s]) =>
+        `📥 ${name}: ${s.count}개 / ${s.tokens.toLocaleString()} 토큰`,
+    );
+    const ts = new Date(inj.timestamp).toLocaleTimeString();
+    const cacheTag = inj.fromCache ? ' (캐시)' : '';
+    toastr.info(lines.join('<br>') + `<br><b>총 ${inj.entryCount}개 / ${inj.totalTokens.toLocaleString()} 토큰</b><br><span style="font-size:10px;opacity:0.7;">갱신: ${ts}${cacheTag}</span>`,
+        '주입 토큰 breakdown', { escapeHtml: false, timeOut: 8000 });
 }
 
 // ============================================================
@@ -1239,6 +1645,10 @@ async function handleToolbarAction(action) {
 
         case 'compress':
             await handleCompress();
+            return;
+
+        case 'arc':
+            await handleGenerateArc();
             return;
 
         case 'reorganize':
@@ -1424,6 +1834,20 @@ async function runOrganize(options = {}) {
             toastr.info('변경사항이 없습니다.');
         }
 
+        // 자동 체인 결과 알림 (backfill / arc)
+        const chain = result.chain;
+        if (chain) {
+            const chainParts = [];
+            if (chain.backfilled > 0) chainParts.push(`🔍 summary ${chain.backfilled}개 백필`);
+            if (chain.arcUpdated) chainParts.push('📖 줄거리 업데이트');
+            if (chainParts.length > 0) {
+                toastr.info(chainParts.join(' · '), '자동 체인', { timeOut: 4000 });
+            }
+            if (chain.errors && chain.errors.length > 0) {
+                toastr.warning(`자동 체인 일부 실패: ${chain.errors.join(' / ')}`, 'LivingLorebook', { timeOut: 6000 });
+            }
+        }
+
         // 자동 하이드
         if (settings.hideAfterOrganize && Array.isArray(result.processedIndices) && result.processedIndices.length > 0) {
             try {
@@ -1464,6 +1888,267 @@ async function runOrganize(options = {}) {
     }
 }
 
+async function handleBackfillSummaries(btn, statusEl) {
+    if (!settings.targetLorebook) {
+        toastr.warning('대상 로어북을 먼저 선택해주세요.');
+        return;
+    }
+    if (btn.dataset.busy === '1') return;
+
+    btn.dataset.busy = '1';
+    btn.disabled = true;
+    const origLabel = btn.innerHTML;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 생성 중...';
+    if (statusEl) statusEl.textContent = '시작...';
+
+    try {
+        const result = await backfillSummaries({
+            onProgress: (done, total) => {
+                if (statusEl) statusEl.textContent = `${done} / ${total} 처리됨`;
+            },
+        });
+
+        if (result.total === 0) {
+            toastr.info('Summary가 필요한 엔트리가 없습니다.');
+            if (statusEl) statusEl.textContent = '대상 없음 (모든 엔트리에 이미 summary 있음)';
+        } else {
+            const msg = `${result.filled}/${result.total}개 summary 생성 완료${result.failed > 0 ? ` (실패 ${result.failed})` : ''}`;
+            toastr.success(msg);
+            if (statusEl) statusEl.textContent = msg;
+        }
+        await refreshPanel();
+    } catch (err) {
+        console.error(`${LOG_PREFIX} Backfill failed:`, err);
+        toastr.error(err.message || 'Summary 생성에 실패했습니다.');
+        if (statusEl) statusEl.textContent = `실패: ${err.message || '알 수 없는 오류'}`;
+    } finally {
+        btn.dataset.busy = '';
+        btn.disabled = false;
+        btn.innerHTML = origLabel;
+    }
+}
+
+/**
+ * 특정 로어북에 대해 managed mode 전환/해제.
+ */
+async function handleMigrateLorebook(lorebookName, goingToManaged, btn) {
+    if (!lorebookName) return;
+    if (btn?.dataset.busy === '1') return;
+
+    const confirmMsg = goingToManaged
+        ? `"${lorebookName}"을 managed mode로 전환합니다.\n\n• LL 메타데이터가 있는 엔트리의 키워드/벡터 활성화가 꺼집니다.\n• 우리 모듈이 setExtensionPrompt로 직접 주입합니다.\n• 외부 엔트리(메타 없음)는 건드리지 않습니다 — backfill 먼저 권장.\n\n계속하시겠습니까?`
+        : `"${lorebookName}"의 managed mode를 해제합니다.\n\n• LL 엔트리의 ST 자동 활성화가 복구됩니다.\n• summary는 유지됩니다.\n\n계속하시겠습니까?`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    if (btn) {
+        btn.dataset.busy = '1';
+        btn.disabled = true;
+        var origHTML = btn.innerHTML;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+    }
+
+    try {
+        const result = await migrateToManagedMode(goingToManaged, lorebookName);
+        const msg = goingToManaged
+            ? `[${lorebookName}] ${result.converted}개 전환${result.skipped > 0 ? ` (외부 ${result.skipped}개 보존)` : ''}`
+            : `[${lorebookName}] ${result.converted}개 복구`;
+        toastr.success(msg);
+
+        // 모든 lorebook이 unmanaged 상태면 AI 선택도 자동 OFF
+        if (!goingToManaged) {
+            const lbs = getEffectiveSelectionLorebooks();
+            const anyManaged = lbs.some(name => isManagedMode(name));
+            if (!anyManaged && settings.summarySelectionEnabled) {
+                settings.summarySelectionEnabled = false;
+                const enabledEl = document.querySelector('#ll_s_selection_enabled');
+                if (enabledEl) enabledEl.checked = false;
+                saveSettings();
+                toastr.info('통제 중인 로어북이 없어 AI 선택을 자동으로 껐습니다.');
+            }
+        }
+
+        clearSelectionCache();
+        const panel = document.querySelector('.ll-panel');
+        if (panel) renderSelectionLorebookList(panel);
+    } catch (err) {
+        console.error(`${LOG_PREFIX} Migrate failed:`, err);
+        toastr.error(err.message || '전환에 실패했습니다.');
+        if (btn) btn.innerHTML = origHTML;
+    } finally {
+        if (btn) {
+            btn.dataset.busy = '';
+            btn.disabled = false;
+        }
+    }
+}
+
+/**
+ * 특정 로어북에 대해 summary 백필 (외부 로어북도 포함).
+ */
+async function handleBackfillLorebook(lorebookName, btn) {
+    if (!lorebookName) return;
+    if (btn?.dataset.busy === '1') return;
+
+    if (btn) {
+        btn.dataset.busy = '1';
+        btn.disabled = true;
+        var origHTML = btn.innerHTML;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+    }
+
+    try {
+        const result = await backfillSummaries({
+            lorebookName,
+            onProgress: (done, total) => {
+                if (btn) btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${done}/${total}`;
+            },
+        });
+        toastr.success(`[${lorebookName}] summary 백필 완료: ${result.filled}개 생성, ${result.failed}개 실패 (총 ${result.total})`);
+        clearSelectionCache();
+        const panel = document.querySelector('.ll-panel');
+        if (panel) renderSelectionLorebookList(panel);
+        await renderTimeline();
+    } catch (err) {
+        console.error(`${LOG_PREFIX} Backfill failed:`, err);
+        toastr.error(err.message || '백필 실패');
+        if (btn) btn.innerHTML = origHTML;
+    } finally {
+        if (btn) {
+            btn.dataset.busy = '';
+            btn.disabled = false;
+        }
+    }
+}
+
+/**
+ * 로어북별 카운트(엔트리 수, summary 있는 수) 비동기 계산.
+ */
+async function getLorebookSummaryStats(lorebookName) {
+    try {
+        const data = lorebookName === settings.targetLorebook
+            ? await loadTargetLorebook()
+            : await loadAnyLorebook(lorebookName);
+        if (!data?.entries) return { total: 0, withSummary: 0 };
+        let total = 0, withSummary = 0;
+        for (const [uid, entry] of Object.entries(data.entries)) {
+            if (entry.disable) continue;
+            total++;
+            const meta = getMetadata(uid, lorebookName);
+            if (meta?.summary && meta.summary.trim()) withSummary++;
+        }
+        return { total, withSummary };
+    } catch {
+        return { total: 0, withSummary: 0 };
+    }
+}
+
+/**
+ * 추가 dropdown에 ST에 등록된 로어북 채우기 (이미 추가된 건 제외).
+ */
+function populateAddLorebookDropdown(panel) {
+    const select = panel.querySelector('#ll_s_add_lorebook');
+    if (!select) return;
+    const current = new Set([settings.targetLorebook, ...getChatSelectionLorebooks()]);
+    const all = world_names || [];
+    select.innerHTML = '<option value="">+ 추가할 로어북 선택...</option>';
+    for (const name of all) {
+        if (current.has(name)) continue;
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        select.appendChild(opt);
+    }
+}
+
+/**
+ * 선택 소스 로어북 카드 리스트 렌더. targetLorebook은 항상 첫 카드, 제거 불가.
+ */
+async function renderSelectionLorebookList(panel) {
+    const container = panel.querySelector('#ll_s_lorebook_list');
+    if (!container) return;
+
+    const target = settings.targetLorebook;
+    const extras = getChatSelectionLorebooks();
+    const all = [];
+    if (target) all.push({ name: target, isTarget: true });
+    for (const n of extras) {
+        if (n !== target) all.push({ name: n, isTarget: false });
+    }
+
+    if (all.length === 0) {
+        container.innerHTML = '<div style="font-size:11px;opacity:0.6;padding:8px;text-align:center;">등록된 로어북이 없습니다. targetLorebook을 먼저 설정하거나 위에서 추가해주세요.</div>';
+        return;
+    }
+
+    container.innerHTML = all.map(item => `
+        <div class="ll-lb-card" data-lorebook="${escapeAttr(item.name)}" style="border:1px solid var(--SmartThemeBorderColor, #444); border-radius:6px; padding:8px; background:rgba(255,255,255,0.02);">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+                <i class="fa-solid ${item.isTarget ? 'fa-star' : 'fa-book'}" style="color:${item.isTarget ? '#fbbf24' : '#81e6d9'};font-size:12px;"></i>
+                <span style="flex:1;font-weight:bold;font-size:12px;">${escapeHtml(item.name)}</span>
+                ${item.isTarget
+                    ? '<span style="font-size:10px;opacity:0.6;">target — 항상 포함</span>'
+                    : '<button class="ll-lb-remove" title="제거" style="background:none;border:none;color:#f87171;cursor:pointer;padding:2px 6px;font-size:11px;"><i class="fa-solid fa-xmark"></i></button>'}
+            </div>
+            <div class="ll-lb-stats" style="font-size:11px;opacity:0.7;margin-bottom:6px;">
+                <span class="ll-lb-stats-text">로딩 중...</span>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button class="menu_button ll-lb-backfill" style="font-size:11px;padding:3px 8px;width:unset;">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> 백필
+                </button>
+                <button class="menu_button ll-lb-migrate" style="font-size:11px;padding:3px 8px;width:unset;">
+                    <i class="fa-solid fa-arrow-right-arrow-left"></i> <span class="ll-lb-migrate-label">전환/해제</span>
+                </button>
+            </div>
+        </div>
+    `).join('');
+
+    // 비동기 stats 채우기 + migrate 라벨 갱신
+    for (const item of all) {
+        const card = container.querySelector(`.ll-lb-card[data-lorebook="${CSS.escape(item.name)}"]`);
+        if (!card) continue;
+        const statsEl = card.querySelector('.ll-lb-stats-text');
+        const migrateLabel = card.querySelector('.ll-lb-migrate-label');
+        const migrateBtn = card.querySelector('.ll-lb-migrate');
+
+        getLorebookSummaryStats(item.name).then(({ total, withSummary }) => {
+            const managed = isManagedMode(item.name);
+            const ratio = total > 0 ? Math.round((withSummary / total) * 100) : 0;
+            statsEl.innerHTML = `${total}개 엔트리 · summary ${withSummary}/${total} (${ratio}%) · <span style="color:${managed ? '#10b981' : '#f59e0b'};">${managed ? 'managed ON' : 'managed OFF'}</span>`;
+            if (migrateLabel) migrateLabel.textContent = managed ? 'managed 해제' : 'managed 전환';
+            if (migrateBtn) migrateBtn.dataset.managed = managed ? '1' : '0';
+        });
+    }
+
+    // 이벤트 위임
+    container.querySelectorAll('.ll-lb-card').forEach(card => {
+        const name = card.dataset.lorebook;
+        const removeBtn = card.querySelector('.ll-lb-remove');
+        const backfillBtn = card.querySelector('.ll-lb-backfill');
+        const migrateBtn = card.querySelector('.ll-lb-migrate');
+
+        if (removeBtn) {
+            removeBtn.addEventListener('click', () => {
+                if (!window.confirm(`"${name}"을 선택 소스에서 제거합니다. (로어북 자체는 삭제되지 않음)\n\n계속?`)) return;
+                const next = getChatSelectionLorebooks().filter(n => n !== name);
+                setChatSelectionLorebooks(next);
+                renderSelectionLorebookList(panel);
+                populateAddLorebookDropdown(panel);
+            });
+        }
+        if (backfillBtn) {
+            backfillBtn.addEventListener('click', () => handleBackfillLorebook(name, backfillBtn));
+        }
+        if (migrateBtn) {
+            migrateBtn.addEventListener('click', () => {
+                const goingTo = migrateBtn.dataset.managed !== '1';
+                handleMigrateLorebook(name, goingTo, migrateBtn);
+            });
+        }
+    });
+}
+
 async function handleCompress() {
     if (!settings.targetLorebook) {
         toastr.warning('대상 로어북을 먼저 선택해주세요.');
@@ -1488,6 +2173,28 @@ async function handleCompress() {
     }
 }
 
+async function handleGenerateArc() {
+    if (!settings.targetLorebook) {
+        toastr.warning('대상 로어북을 먼저 선택해주세요.');
+        return;
+    }
+
+    setToolbarProcessing(true, 'arc');
+
+    try {
+        const result = await generateStoryArc();
+        const verb = result.created ? '생성' : '업데이트';
+        toastr.success(`📖 Story Arc ${verb}됨 (${result.tokens.toLocaleString()} 토큰, 항상 inject)`);
+        clearSelectionCache();
+        await refreshPanel();
+    } catch (err) {
+        console.error(`${LOG_PREFIX} Story Arc generation failed:`, err);
+        toastr.error(err.message || 'Story Arc 생성에 실패했습니다.');
+    } finally {
+        setToolbarProcessing(false);
+    }
+}
+
 async function handleReorganize() {
     if (!settings.targetLorebook) {
         toastr.warning('대상 로어북을 먼저 선택해주세요.');
@@ -1499,6 +2206,9 @@ async function handleReorganize() {
     try {
         const result = await reorganizeExisting();
         toastr.success(`${result.reorganized}개의 엔트리로 재구성되었습니다.`);
+        if (result.arcUpdated) {
+            toastr.info('📖 줄거리도 업데이트됨', '자동 체인', { timeOut: 4000 });
+        }
         await refreshPanel();
     } catch (err) {
         console.error(`${LOG_PREFIX} Reorganize failed:`, err);
@@ -1512,21 +2222,119 @@ async function handleReorganize() {
 // Event Listeners
 // ============================================================
 
+// ============================================================
+// Generation Hook — Summary 기반 AI 선택 + setExtensionPrompt 주입
+// ============================================================
+
+const INJECTION_KEY = 'LivingLorebook_selection';
+
+/**
+ * 매 generation 직전 호출. 활성 후보 중 AI가 고른 top-N을 prompt에 주입.
+ * dryRun / skipWIAN / 토글 OFF 시 skip.
+ */
+/**
+ * 사전계산 — 답변 직후 / 사용자 메시지 직후 백그라운드에서 selectEntries 호출.
+ * 다음 generation 시점엔 캐시 적중되어 wait 없음.
+ * fire-and-forget — 실패해도 generation 막지 않음.
+ */
+let _precomputeInflight = false;
+function precomputeSelection(source) {
+    if (_precomputeInflight) return; // 중복 호출 방지
+    if (!settings.enabled || !settings.summarySelectionEnabled) return;
+
+    _precomputeInflight = true;
+    const t0 = performance.now();
+
+    // setTimeout으로 다음 tick에 시작 — 현재 이벤트 처리 막지 않음
+    setTimeout(async () => {
+        try {
+            const chat = context.chat || [];
+            const result = await selectEntries(chat);
+            const dt = (performance.now() - t0).toFixed(0);
+            console.log(`${LOG_PREFIX} Precompute (${source}) ${dt}ms: ${result.entries.length} entries (${result.stage})`);
+        } catch (err) {
+            console.warn(`${LOG_PREFIX} Precompute (${source}) failed:`, err.message);
+        } finally {
+            _precomputeInflight = false;
+        }
+    }, 0);
+}
+
+async function onGenerationBeforeWI(type, options, dryRun) {
+    if (dryRun) return;
+    // 이전 setExtensionPrompt 잔여가 있으면 항상 비움 (구버전 호환)
+    setExtensionPrompt(INJECTION_KEY, '', 1, 4, false, 0);
+
+    if (!settings.enabled) return;
+    if (!settings.summarySelectionEnabled) return;
+    if (options?.skipWIAN) return;
+
+    const t0 = performance.now();
+    try {
+        const chat = context.chat || [];
+        // selectEntries 자체가 managed mode 아닌 lorebook은 후보에서 제외함 — 이중주입 안전
+        const result = await selectEntries(chat);
+        const dt = (performance.now() - t0).toFixed(0);
+
+        if (!result.entries || result.entries.length === 0) {
+            console.log(`${LOG_PREFIX} Inject empty (${dt}ms, ${result.stage})`);
+            return;
+        }
+
+        // ST 평소 WI 흐름에 강제 활성화 — 프리셋 World Info 슬롯에 자연스럽게 들어감
+        // entry의 position/depth/role/order 등 모두 ST가 평소처럼 처리
+        const entriesToActivate = result.entries.map(e => {
+            const raw = e.rawEntry || {};
+            return {
+                ...raw,
+                world: e.lorebookName,
+                uid: raw.uid !== undefined ? raw.uid : (Number.isFinite(Number(e.uid)) ? Number(e.uid) : e.uid),
+            };
+        });
+        await context.eventSource.emit(event_types.WORLDINFO_FORCE_ACTIVATE, entriesToActivate);
+
+        const cacheTag = result.fromCache ? ' [CACHED]' : '';
+        console.log(`${LOG_PREFIX} Force-activated ${entriesToActivate.length} entries in ${dt}ms${cacheTag} (${result.stage})`);
+
+        // 주입 칩 즉시 갱신
+        try { refreshInjectChip(); } catch { /* ignore */ }
+    } catch (err) {
+        console.error(`${LOG_PREFIX} Selection injection failed:`, err);
+    }
+}
+
 function registerEventListeners() {
     const eventSource = context.eventSource;
 
-    // 채팅 변경 시 배지 업데이트
+    // 채팅 변경 시 배지 업데이트 + 선택 캐시 무효화
     eventSource.on(event_types.CHAT_CHANGED, () => {
-        // 채팅별 로어북 복원
-        const chatLorebook = getChatLorebook();
-        settings.targetLorebook = chatLorebook;
-        $('#ll_target_lorebook').val(chatLorebook);
+        // 채팅별 LL 메타데이터 복원 (target + selection)
+        restoreChatMetadata();
+        $('#ll_target_lorebook').val(settings.targetLorebook || '');
+
         updateStatusBar();
+        clearSelectionCache();
+
+        // 패널 열려있으면 카드 리스트 + dropdown 다시 렌더 — stale 상태 회피
+        const panel = document.querySelector('.ll-panel');
+        if (panel?.classList.contains('open')) {
+            renderSelectionLorebookList(panel);
+            populateAddLorebookDropdown(panel);
+        }
     });
 
-    // 메시지 수신 시 미처리 카운트 업데이트
+    // Generation hook — WI 처리 전에 우리 주입 슬롯 채움 (캐시 적중이면 즉시)
+    eventSource.on(event_types.GENERATION_AFTER_COMMANDS, onGenerationBeforeWI);
+
+    // 메시지 수신 시 미처리 카운트 업데이트 + 다음 generation을 위한 백그라운드 사전계산
     eventSource.on(event_types.MESSAGE_RECEIVED, () => {
         updateStatusBar();
+        precomputeSelection('MESSAGE_RECEIVED');
+    });
+
+    // 사용자 메시지 보낸 직후에도 사전계산 (입력 → generation 사이 짧은 wait 활용)
+    eventSource.on(event_types.MESSAGE_SENT, () => {
+        precomputeSelection('MESSAGE_SENT');
     });
 
     // ESC로 패널 닫기

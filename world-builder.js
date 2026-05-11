@@ -3,8 +3,9 @@
  */
 
 import { callLLM } from './llm-service.js';
-import { getSettings, createEntry, deactivateEntry, deleteEntry, saveLorebook, loadTargetLorebook, refreshEditor } from './lore-store.js';
+import { getSettings, createEntry, deactivateEntry, deleteEntry, saveLorebook, loadTargetLorebook, refreshEditor, getMetadata } from './lore-store.js';
 import { insertEntries, getCollectionId } from './vector-service.js';
+import { generateStoryArc } from './memory-manager.js';
 
 const LOG_PREFIX = '[LivingLorebook]';
 
@@ -389,7 +390,29 @@ Output ONLY the JSON array.`;
     }
 
     console.log(`${LOG_PREFIX} Reorganized into ${created.length} entries`);
-    return { reorganized: created.length };
+
+    // 자동 체인: reorganize 후 기존 arc 있으면 자동 업데이트
+    let arcUpdated = false;
+    if (settings.autoArcOnReorganize) {
+        try {
+            const freshData = await loadTargetLorebook();
+            let hasArc = false;
+            for (const [uid, entry] of Object.entries(freshData?.entries || {})) {
+                if (entry.disable) continue;
+                const meta = getMetadata(uid, settings.targetLorebook);
+                if (meta?.category === 'arc') { hasArc = true; break; }
+            }
+            if (hasArc) {
+                console.log(`${LOG_PREFIX} Auto-chain: updating story arc after reorganize...`);
+                await generateStoryArc();
+                arcUpdated = true;
+            }
+        } catch (err) {
+            console.warn(`${LOG_PREFIX} Auto-chain arc update failed:`, err.message);
+        }
+    }
+
+    return { reorganized: created.length, arcUpdated };
 }
 
 /**

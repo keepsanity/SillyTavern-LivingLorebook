@@ -22,13 +22,22 @@
                 </select>
             </div>
 
-            <!-- Connection Profile -->
+            <!-- Connection Profile (organize/compress/backfill) -->
             <div class="ll-row">
-                <label><i class="fa-solid fa-plug" style="color: #81e6d9; margin-right: 4px;"></i>Connection Profile</label>
+                <label><i class="fa-solid fa-plug" style="color: #81e6d9; margin-right: 4px;"></i>Profile · 기억 관리</label>
                 <select class="ll-select connection_profile">
                     <option value="">(메인 API 사용)</option>
                 </select>
-                <div class="ll-help" style="width: 100%; margin-top: 2px;">기억 관리에 사용할 별도 모델. 비워두면 메인 API 사용.</div>
+                <div class="ll-help" style="width: 100%; margin-top: 2px;">organize / compress / summary 백필에 사용. 비워두면 메인 API.</div>
+            </div>
+
+            <!-- Connection Profile (AI 선택 전용) -->
+            <div class="ll-row">
+                <label><i class="fa-solid fa-microscope" style="color: #b794f4; margin-right: 4px;"></i>Profile · AI 선택</label>
+                <select class="ll-select ll_selection_profile">
+                    <option value="">(위 Profile과 동일)</option>
+                </select>
+                <div class="ll-help" style="width: 100%; margin-top: 2px;">매 generation 직전 summary 보고 엔트리 고를 때만 사용. 분류 작업이라 Haiku 같은 싼 모델 권장. 비우면 위 Profile fallback.</div>
             </div>
 
             <hr class="ll-divider" />

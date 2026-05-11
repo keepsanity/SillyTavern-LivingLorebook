@@ -5,10 +5,10 @@
 import { callLLM } from './llm-service.js';
 import {
     getSettings, saveSettings,
-    loadTargetLorebook, saveLorebook, refreshEditor,
-    createEntry, updateEntryContent, deactivateEntry,
+    loadTargetLorebook, loadAnyLorebook, saveLorebook, refreshEditor,
+    createEntry, updateEntryContent, deactivateEntry, setEntryPinned,
     getMetadata, setMetadata,
-    countTokens,
+    countTokens, isManagedMode,
 } from './lore-store.js';
 import { insertEntries, deleteEntries, getCollectionId, getEntryHash } from './vector-service.js';
 
@@ -114,6 +114,7 @@ CRITICAL: Before adding ANY new entry, check if similar information already exis
                 content: item.content || '',
                 keywords: item.keywords || [item.title],
                 category: item.category || 'fact',
+                summary: typeof item.summary === 'string' ? item.summary : '',
             });
             if (entry) {
                 result.added++;
@@ -144,7 +145,11 @@ CRITICAL: Before adding ANY new entry, check if similar information already exis
             }
 
             updateEntryContent(data, uid, item.newContent, settings.targetLorebook);
-            setMetadata(uid, { lastUpdated: Date.now() }, settings.targetLorebook);
+            const updateMeta = { lastUpdated: Date.now() };
+            if (typeof item.summary === 'string' && item.summary.trim()) {
+                updateMeta.summary = item.summary.trim();
+            }
+            setMetadata(uid, updateMeta, settings.targetLorebook);
 
             // 새 벡터 추가
             newVectorEntries.push({
@@ -193,10 +198,57 @@ CRITICAL: Before adding ANY new entry, check if similar information already exis
     saveSettings();
 
     console.log(`${LOG_PREFIX} Organize complete: +${result.added} ~${result.updated} -${result.deactivated}`);
+
+    // ============================================================
+    // 자동 체인: organize 후 backfill / arc 자동 실행
+    // 실패해도 organize 본체는 성공으로 처리. 토스트로 알림.
+    // ============================================================
+    const chainResult = { backfilled: 0, arcUpdated: false, errors: [] };
+
+    // 1. backfill 자동 — managed mode targetLorebook이고 새 entries 있을 때
+    if (settings.autoBackfillOnOrganize && result.added > 0 && isManagedMode(settings.targetLorebook)) {
+        try {
+            console.log(`${LOG_PREFIX} Auto-chain: backfill for new entries...`);
+            const bfResult = await backfillSummaries({ lorebookName: settings.targetLorebook });
+            chainResult.backfilled = bfResult.filled;
+            console.log(`${LOG_PREFIX} Auto-chain: backfill ${bfResult.filled}/${bfResult.total} filled`);
+        } catch (err) {
+            console.warn(`${LOG_PREFIX} Auto-chain backfill failed:`, err.message);
+            chainResult.errors.push(`backfill: ${err.message}`);
+        }
+    }
+
+    // 2. arc 업데이트 자동 — 기존 arc entry 있을 때만
+    if (settings.autoArcOnOrganize) {
+        try {
+            // 기존 arc entry 확인
+            const freshData = await loadTargetLorebook();
+            let hasArc = false;
+            for (const [uid, entry] of Object.entries(freshData?.entries || {})) {
+                if (entry.disable) continue;
+                const meta = getMetadata(uid, settings.targetLorebook);
+                if (meta?.category === 'arc') {
+                    hasArc = true;
+                    break;
+                }
+            }
+            if (hasArc) {
+                console.log(`${LOG_PREFIX} Auto-chain: updating story arc...`);
+                await generateStoryArc();
+                chainResult.arcUpdated = true;
+                console.log(`${LOG_PREFIX} Auto-chain: arc updated`);
+            }
+        } catch (err) {
+            console.warn(`${LOG_PREFIX} Auto-chain arc update failed:`, err.message);
+            chainResult.errors.push(`arc: ${err.message}`);
+        }
+    }
+
     return {
         ...result,
         processedRange: [startIdx, endIdx],
         processedIndices,
+        chain: chainResult,
     };
 }
 
@@ -353,6 +405,263 @@ Rules:
 
     console.log(`${LOG_PREFIX} Compression complete: ${compressed} entries compressed`);
     return { compressed };
+}
+
+// ============================================================
+// Backfill Summaries — 기존 엔트리에 summary 일괄 생성
+// ============================================================
+
+/**
+ * Summary 없는 활성 엔트리들에 대해 일괄로 "When to select" 힌트 생성.
+ * AI 선택 파이프라인(Phase 2)이 작동하려면 모든 엔트리에 summary가 있어야 함.
+ *
+ * @param {object} options - { batchSize?: number, onProgress?: (done, total) => void }
+ * @returns {Promise<{filled: number, skipped: number, failed: number, total: number}>}
+ */
+export async function backfillSummaries(options = {}) {
+    const settings = getSettings();
+    const batchSize = options.batchSize ?? 8;
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+    const lorebookName = options.lorebookName || settings.targetLorebook;
+
+    if (!lorebookName) {
+        throw new Error('대상 로어북을 먼저 선택해주세요.');
+    }
+
+    const data = lorebookName === settings.targetLorebook
+        ? await loadTargetLorebook()
+        : await loadAnyLorebook(lorebookName);
+    if (!data) {
+        throw new Error(`로어북 "${lorebookName}"을 로드할 수 없습니다.`);
+    }
+
+    // summary가 비어있는 활성 엔트리만 수집 (외부 로어북도 동일 — 메타 없으면 자동 생성됨)
+    const targets = [];
+    for (const [uid, entry] of Object.entries(data.entries || {})) {
+        if (entry.disable) continue;
+        const meta = getMetadata(uid, lorebookName);
+        const existing = meta?.summary;
+        if (existing && existing.trim()) continue;
+        targets.push({ uid: String(uid), title: entry.comment || 'untitled', content: entry.content || '' });
+    }
+
+    const total = targets.length;
+    if (total === 0) {
+        return { filled: 0, skipped: 0, failed: 0, total: 0 };
+    }
+
+    console.log(`${LOG_PREFIX} Backfilling summaries for ${total} entries...`);
+
+    let filled = 0;
+    let failed = 0;
+    let processed = 0;
+
+    // 배치 단위로 LLM 호출
+    for (let i = 0; i < targets.length; i += batchSize) {
+        const batch = targets.slice(i, i + batchSize);
+
+        const entriesBlock = batch.map(e => {
+            // 너무 긴 엔트리는 앞부분만 — summary 생성에 전체 내용 불필요
+            const truncated = e.content.length > 2000 ? e.content.slice(0, 2000) + '...' : e.content;
+            return `[uid:${e.uid}] ${e.title}\n${truncated}`;
+        }).join('\n\n---\n\n');
+
+        const systemPrompt = 'You are a retrieval-summary writer for a roleplay lorebook. Output ONLY valid JSON. No markdown fences, no explanations.';
+        const userPrompt = settings.summaryBackfillPrompt.replace('{{entries}}', entriesBlock);
+
+        try {
+            const response = await callLLM(systemPrompt, userPrompt, 2000, settings);
+            const cleaned = response.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '').trim();
+            const parsed = JSON.parse(cleaned);
+
+            if (Array.isArray(parsed.summaries)) {
+                for (const s of parsed.summaries) {
+                    const uid = String(s.uid);
+                    const summary = typeof s.summary === 'string' ? s.summary.trim() : '';
+                    if (!summary) {
+                        failed++;
+                        continue;
+                    }
+                    // 외부 엔트리(메타 없음)면 자동으로 LL 메타데이터 시드 생성
+                    const existingMeta = getMetadata(uid, lorebookName);
+                    if (!existingMeta) {
+                        const ent = data.entries[uid];
+                        setMetadata(uid, {
+                            tier: 1,
+                            createdAt: Date.now(),
+                            category: 'fact',
+                            keywords: Array.isArray(ent?.key) && ent.key.length > 0
+                                ? ent.key
+                                : [ent?.comment || 'untitled'],
+                            summary,
+                        }, lorebookName);
+                    } else {
+                        setMetadata(uid, { summary }, lorebookName);
+                    }
+                    filled++;
+                }
+            } else {
+                console.warn(`${LOG_PREFIX} Backfill batch returned no summaries array:`, parsed);
+                failed += batch.length;
+            }
+        } catch (err) {
+            console.error(`${LOG_PREFIX} Backfill batch failed:`, err);
+            failed += batch.length;
+        }
+
+        processed += batch.length;
+        if (onProgress) {
+            try { onProgress(processed, total); } catch { /* ignore */ }
+        }
+    }
+
+    console.log(`${LOG_PREFIX} Backfill complete: ${filled} filled, ${failed} failed, ${total} total`);
+    return { filled, skipped: 0, failed, total };
+}
+
+/**
+ * Story Arc 생성/업데이트 — chat 전체를 봐서 timeline + 관계 호 요약 entry로 저장.
+ * 기존 arc entry 있으면 그것 update (incremental), 없으면 새로 생성.
+ * arc entry는 자동 pinned (constant=true) — 매 generation 항상 inject.
+ *
+ * @returns {Promise<{created: boolean, updated: boolean, uid: string, tokens: number}>}
+ */
+export async function generateStoryArc() {
+    const settings = getSettings();
+
+    if (!settings.targetLorebook) {
+        throw new Error('대상 로어북을 먼저 선택해주세요.');
+    }
+
+    const data = await loadTargetLorebook();
+    if (!data) {
+        throw new Error('로어북을 로드할 수 없습니다.');
+    }
+
+    const ctx = SillyTavern.getContext();
+    const chat = ctx.chat || [];
+    if (chat.length === 0) {
+        throw new Error('대화가 비어있습니다.');
+    }
+
+    // 활성 chat만 (is_hidden, is_system 제외) + 최근 N개로 trim
+    const activeChat = chat.filter(m => !m.is_system && !m.is_hidden);
+    const arcChatLimit = settings.arcChatLimit || 100;
+    const recentActive = activeChat.length > arcChatLimit
+        ? activeChat.slice(-arcChatLimit)
+        : activeChat;
+    const conversationText = recentActive.map(m => {
+        const name = m.is_user ? 'User' : (m.name || 'Character');
+        return `${name}: ${m.mes}`;
+    }).join('\n');
+
+    // 기존 arc entry 찾기 + 다른 active entries 본문 수집
+    const contentLimit = Number(settings.arcEntryContentLimit) || 0;
+    let existingUid = null;
+    let existingContent = '';
+    const entriesByCategory = {}; // { category: [{ title, summary, content }] }
+    for (const [uid, entry] of Object.entries(data.entries || {})) {
+        if (entry.disable) continue;
+        const meta = getMetadata(uid, settings.targetLorebook);
+        const cat = meta?.category || 'fact';
+        if (cat === 'arc') {
+            existingUid = uid;
+            existingContent = entry.content || '';
+            continue; // arc는 별도 처리 — entries 모음엔 안 넣음
+        }
+        // content에서 `## title\n` 헤더 제거 (중복 방지)
+        let body = (entry.content || '').replace(/^##\s+.*\r?\n/, '').trim();
+        if (contentLimit > 0 && body.length > contentLimit) {
+            body = body.slice(0, contentLimit) + '...';
+        }
+        // title이라도 있으면 포함 — 사건 흐름에서 빠지는 것보단 이름이라도 보내는 게 나음
+        const title = entry.comment;
+        if (!title && !body && !meta?.summary) continue;
+        if (!entriesByCategory[cat]) entriesByCategory[cat] = [];
+        entriesByCategory[cat].push({
+            title: title || 'untitled',
+            summary: (meta?.summary || '').trim(),
+            content: body,
+        });
+    }
+
+    // entries 텍스트 조립 (카테고리별 그룹) — full content + summary 둘 다
+    const categoryOrder = ['character', 'relationship', 'location', 'event', 'routine', 'item', 'fact'];
+    const entriesLines = [];
+    for (const cat of categoryOrder) {
+        const items = entriesByCategory[cat];
+        if (!items || items.length === 0) continue;
+        entriesLines.push(`### [${cat}]`);
+        for (const it of items) {
+            entriesLines.push(`\n--- ${it.title} ---`);
+            if (it.summary) entriesLines.push(`(retrieval hint: ${it.summary})`);
+            if (it.content) entriesLines.push(it.content);
+        }
+    }
+    const entriesBlock = entriesLines.length > 0
+        ? entriesLines.join('\n')
+        : '(none)';
+
+    const existingArcBlock = existingContent
+        ? `Previous arc summary (update/expand, do NOT discard existing facts unless contradicted by new events):\n${existingContent.replace(/^##\s+.*\r?\n/, '').trim()}\n`
+        : '';
+
+    const systemPrompt = 'You are a narrative arc summarizer. Output ONLY the prose summary text. No JSON, no markdown headers, no preamble.';
+    const userPrompt = settings.storyArcPrompt
+        .replace('{{existingArc}}', existingArcBlock)
+        .replace('{{existingEntries}}', entriesBlock)
+        .replace('{{conversation}}', conversationText);
+
+    const totalEntries = Object.values(entriesByCategory).reduce((sum, arr) => sum + arr.length, 0);
+    console.log(`${LOG_PREFIX} Generating story arc (active chat: ${recentActive.length}/${activeChat.length}, hidden: ${chat.length - activeChat.length}, entries: ${totalEntries}, existing arc: ${existingUid ? 'yes' : 'no'})...`);
+
+    const arcText = await callLLM(systemPrompt, userPrompt, 2000, settings);
+    if (!arcText || !arcText.trim()) {
+        throw new Error('AI가 빈 응답을 반환했습니다.');
+    }
+
+    const cleanedArc = arcText.trim();
+    const arcTitle = 'Story Arc';
+
+    let resultUid;
+    let created = false;
+    let updated = false;
+
+    if (existingUid) {
+        // 기존 update
+        updateEntryContent(data, existingUid, cleanedArc, settings.targetLorebook);
+        setEntryPinned(data, existingUid, true);  // 항상 pinned 유지
+        setMetadata(existingUid, { lastUpdated: Date.now() }, settings.targetLorebook);
+        resultUid = existingUid;
+        updated = true;
+        console.log(`${LOG_PREFIX} Story Arc updated (uid=${existingUid})`);
+    } else {
+        // 새로 생성
+        const entry = await createEntry(settings.targetLorebook, data, {
+            title: arcTitle,
+            content: cleanedArc,
+            keywords: ['story_arc', 'timeline', 'narrative'],
+            category: 'arc',
+        });
+        if (!entry) {
+            throw new Error('Arc entry 생성 실패');
+        }
+        // 새 entry pinned 처리
+        setEntryPinned(data, entry.uid, true);
+        // arc는 summary도 자동 — "When to select"는 사실상 항상이지만 형식상 채워둠
+        setMetadata(String(entry.uid), {
+            summary: 'When to select: always (story arc — provides overall timeline and relationship context).',
+        }, settings.targetLorebook);
+        resultUid = String(entry.uid);
+        created = true;
+        console.log(`${LOG_PREFIX} Story Arc created (uid=${entry.uid})`);
+    }
+
+    await saveLorebook(settings.targetLorebook, data);
+    refreshEditor();
+
+    const tokens = await countTokens(cleanedArc);
+    return { created, updated, uid: resultUid, tokens };
 }
 
 /**
