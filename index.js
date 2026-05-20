@@ -70,13 +70,11 @@ function setChatLorebook(lorebookName) {
  * 현재 채팅의 selection 로어북 추가분 (targetLorebook 외 로어북들).
  * targetLorebook은 항상 자동 포함됨 (lore-store 쪽에서 처리).
  *
- * 우선순위: chat_metadata → 글로벌 settings → []
- * → chat_metadata에 없는 채팅에서도 글로벌 값으로 fallback (사용자 마지막 설정 유지)
+ * 정책: 채팅별 strict. chat_metadata에 없으면 빈 배열 (다른 채팅 selection 절대 leak 안 됨).
  */
 function getChatSelectionLorebooks() {
     const arr = chat_metadata?.[METADATA_KEY]?.selectionLorebooks;
-    if (Array.isArray(arr)) return arr;
-    return Array.isArray(settings?.selectionLorebooks) ? settings.selectionLorebooks : [];
+    return Array.isArray(arr) ? arr : [];
 }
 
 function setChatSelectionLorebooks(arr) {
@@ -128,20 +126,24 @@ async function init() {
  * 현재 채팅의 LL 메타데이터 → settings 복원.
  * init 시점, CHAT_CHANGED 시점 둘 다 호출.
  *
- * 정책: chat_metadata에 명시적 값이 있으면 그것 사용, 없으면 글로벌 settings 그대로 유지
- * (덮어쓰지 않음 — 사용자가 다른 채팅에서 설정한 값 보존)
+ * 정책: 채팅별 strict.
+ * - chat_metadata에 LL 데이터 있음 → 그 값으로 settings 복원
+ * - 없음 → settings를 명시적으로 비움 (다른 채팅의 selection이 leak되지 않게)
  */
 function restoreChatMetadata() {
     const stored = chat_metadata?.[METADATA_KEY];
-    if (!stored) return; // 글로벌 settings 그대로
 
-    if (typeof stored.targetLorebook === 'string') {
-        settings.targetLorebook = stored.targetLorebook;
+    if (!stored) {
+        // 새 채팅 / LL 데이터 없는 채팅 — strict reset
+        settings.targetLorebook = '';
+        settings.selectionLorebooks = [];
+        return;
     }
-    if (Array.isArray(stored.selectionLorebooks)) {
-        settings.selectionLorebooks = [...stored.selectionLorebooks];
-    }
-    // stored.selectionLorebooks가 undefined면 글로벌 그대로 유지
+
+    settings.targetLorebook = typeof stored.targetLorebook === 'string' ? stored.targetLorebook : '';
+    settings.selectionLorebooks = Array.isArray(stored.selectionLorebooks)
+        ? [...stored.selectionLorebooks]
+        : [];
 }
 
 // ============================================================
@@ -500,7 +502,24 @@ function createPanel() {
 
             <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
                 <div style="font-weight:bold;font-size:12px;">
-                    <i class="fa-solid fa-layer-group"></i> 선택 소스 로어북
+                    <i class="fa-solid fa-star" style="color:#fbbf24;"></i> Target 로어북 (쓰기 대상)
+                </div>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <select class="ll-settings-input" id="ll_s_target_lorebook" style="flex:1;">
+                        <option value="">(선택 안 됨)</option>
+                    </select>
+                    <button class="menu_button" id="ll_s_target_lorebook_clear" title="연결 해제" style="width:unset;padding:4px 8px;">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+                <div style="font-size:10px;opacity:0.6;line-height:1.3;">
+                    organize / compress / arc가 새 entry를 만들 로어북. 항상 자동 포함됨.
+                </div>
+            </div>
+
+            <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+                <div style="font-weight:bold;font-size:12px;">
+                    <i class="fa-solid fa-layer-group"></i> 선택 소스 로어북 (읽기 대상 — 추가)
                 </div>
                 <div style="display:flex;gap:6px;align-items:center;">
                     <select class="ll-settings-input" id="ll_s_add_lorebook" style="flex:1;">
@@ -728,6 +747,7 @@ function renderSuggestList() {
     }
 
     const catLabels = {
+        arc: '줄거리',
         character: '캐릭터', relationship: '관계', location: '장소',
         event: '사건', routine: '일상', item: '아이템', fact: '설정',
     };
@@ -993,6 +1013,43 @@ function bindSettingsInputs(panel) {
             settings.selectionCacheEnabled = cacheEnabledEl.checked;
             saveSettings();
             if (!cacheEnabledEl.checked) clearSelectionCache();
+        });
+    }
+
+    // Target 로어북 변경 dropdown
+    populateTargetLorebookDropdown(panel);
+    const targetSelect = panel.querySelector('#ll_s_target_lorebook');
+    const targetClearBtn = panel.querySelector('#ll_s_target_lorebook_clear');
+    if (targetSelect) {
+        targetSelect.addEventListener('change', () => {
+            const val = targetSelect.value;
+            // 항상 setChatLorebook 호출 — chat_metadata 저장 보장
+            // (같은 값 선택했더라도 stale 글로벌 settings를 chat_metadata에 저장하는 의미)
+            setChatLorebook(val);
+            // 사이드바 dropdown 동기화
+            $('#ll_target_lorebook').val(val || '');
+            clearSelectionCache();
+            renderSelectionLorebookList(panel);
+            populateAddLorebookDropdown(panel);
+            populateTargetLorebookDropdown(panel);
+            updateStatusBar();
+            renderTimeline();
+            toastr.info(val ? `Target → "${val}" (chat에 저장됨)` : 'Target 해제됨', 'LivingLorebook');
+        });
+    }
+    if (targetClearBtn) {
+        targetClearBtn.addEventListener('click', () => {
+            if (!settings.targetLorebook) return;
+            if (!window.confirm(`Target 로어북 "${settings.targetLorebook}" 연결을 해제합니다.\n\n로어북 자체는 삭제되지 않습니다. 계속?`)) return;
+            setChatLorebook('');
+            $('#ll_target_lorebook').val('');
+            clearSelectionCache();
+            renderSelectionLorebookList(panel);
+            populateAddLorebookDropdown(panel);
+            populateTargetLorebookDropdown(panel);
+            updateStatusBar();
+            renderTimeline();
+            toastr.info('Target 해제됨');
         });
     }
 
@@ -1340,6 +1397,7 @@ function escapeAttr(str) {
 // ============================================================
 
 const CATEGORY_LABELS = {
+    arc: '줄거리',
     character: '캐릭터', relationship: '관계', location: '장소',
     event: '사건', routine: '일상', item: '아이템', fact: '설정',
 };
@@ -2044,6 +2102,24 @@ async function getLorebookSummaryStats(lorebookName) {
 }
 
 /**
+ * Target 로어북 dropdown 채우기 — ST의 모든 로어북 + 현재값 선택.
+ */
+function populateTargetLorebookDropdown(panel) {
+    const select = panel.querySelector('#ll_s_target_lorebook');
+    if (!select) return;
+    const current = settings.targetLorebook || '';
+    const all = world_names || [];
+    select.innerHTML = '<option value="">(선택 안 됨)</option>';
+    for (const name of [...all].sort()) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        if (name === current) opt.selected = true;
+        select.appendChild(opt);
+    }
+}
+
+/**
  * 추가 dropdown에 ST에 등록된 로어북 채우기 (이미 추가된 건 제외).
  */
 function populateAddLorebookDropdown(panel) {
@@ -2233,8 +2309,11 @@ const INJECTION_KEY = 'LivingLorebook_selection';
  * dryRun / skipWIAN / 토글 OFF 시 skip.
  */
 /**
- * 사전계산 — 답변 직후 / 사용자 메시지 직후 백그라운드에서 selectEntries 호출.
- * 다음 generation 시점엔 캐시 적중되어 wait 없음.
+ * 사전계산 — 사용자 메시지 직후 selectEntries 호출.
+ * GENERATION_AFTER_COMMANDS와 inflight dedup으로 LLM 호출 1번만 발생.
+ *
+ * 중요: setTimeout 사용 안 함. 즉시 호출해야 selectEntries 내부의 _selectInflight가
+ * 동기적으로 채워지고 곧이어 발화하는 GENERATION_AFTER_COMMANDS hook이 dedup 가능.
  * fire-and-forget — 실패해도 generation 막지 않음.
  */
 let _precomputeInflight = false;
@@ -2245,8 +2324,8 @@ function precomputeSelection(source) {
     _precomputeInflight = true;
     const t0 = performance.now();
 
-    // setTimeout으로 다음 tick에 시작 — 현재 이벤트 처리 막지 않음
-    setTimeout(async () => {
+    // 즉시 호출 (setTimeout X) — _selectInflight 동기 set → 후속 hook dedup 가능
+    (async () => {
         try {
             const chat = context.chat || [];
             const result = await selectEntries(chat);
@@ -2257,7 +2336,7 @@ function precomputeSelection(source) {
         } finally {
             _precomputeInflight = false;
         }
-    }, 0);
+    })();
 }
 
 async function onGenerationBeforeWI(type, options, dryRun) {
@@ -2315,24 +2394,25 @@ function registerEventListeners() {
         updateStatusBar();
         clearSelectionCache();
 
-        // 패널 열려있으면 카드 리스트 + dropdown 다시 렌더 — stale 상태 회피
+        // 패널 열려있으면 카드 리스트 + dropdown들 다시 렌더 — stale 상태 회피
         const panel = document.querySelector('.ll-panel');
         if (panel?.classList.contains('open')) {
             renderSelectionLorebookList(panel);
             populateAddLorebookDropdown(panel);
+            populateTargetLorebookDropdown(panel);
         }
     });
 
     // Generation hook — WI 처리 전에 우리 주입 슬롯 채움 (캐시 적중이면 즉시)
     eventSource.on(event_types.GENERATION_AFTER_COMMANDS, onGenerationBeforeWI);
 
-    // 메시지 수신 시 미처리 카운트 업데이트 + 다음 generation을 위한 백그라운드 사전계산
+    // 메시지 수신 시 미처리 카운트 업데이트
+    // (precompute는 MESSAGE_SENT만 사용 — MESSAGE_RECEIVED는 같은 캐시 키라 중복 호출)
     eventSource.on(event_types.MESSAGE_RECEIVED, () => {
         updateStatusBar();
-        precomputeSelection('MESSAGE_RECEIVED');
     });
 
-    // 사용자 메시지 보낸 직후에도 사전계산 (입력 → generation 사이 짧은 wait 활용)
+    // 사용자 메시지 보낸 직후 사전계산 — 이 캐시가 스와이프/리젠/다음 generation 모두 커버
     eventSource.on(event_types.MESSAGE_SENT, () => {
         precomputeSelection('MESSAGE_SENT');
     });

@@ -52,6 +52,88 @@ export function clearSelectionCache() {
 }
 
 /**
+ * 잘린 JSON에서 selected array의 완성된 items만 추출.
+ * 응답이 maxTokens 한도 초과로 잘렸을 때 안전망.
+ *
+ * 입력 예시 (잘림):
+ *   { "selected": [
+ *     { "k": 0, "reason": "..." },
+ *     { "k": 6, "reason": "..." },
+ *     { "k": 22, "reason": "잘림—
+ *
+ * 출력: 처음 2개 item만 추출.
+ *
+ * @param {string} cleaned - markdown fence 제거된 raw text
+ * @returns {Array<{k: number, reason?: string}>|null}
+ */
+function salvageSelectedArray(cleaned) {
+    // selected 또는 다른 root key 찾기
+    const rootKeys = ['selected', 'chosen', 'entries', 'selection', 'results'];
+    let arrayStart = -1;
+    for (const key of rootKeys) {
+        const re = new RegExp(`"${key}"\\s*:\\s*\\[`, 'i');
+        const m = cleaned.match(re);
+        if (m) {
+            arrayStart = m.index + m[0].length;
+            break;
+        }
+    }
+    if (arrayStart === -1) return null;
+
+    // array 내용에서 완성된 객체들 추출
+    const items = [];
+    let i = arrayStart;
+    const len = cleaned.length;
+
+    while (i < len) {
+        // 공백/콤마 스킵
+        while (i < len && /[\s,]/.test(cleaned[i])) i++;
+        if (i >= len) break;
+        if (cleaned[i] === ']') break; // array 정상 종료
+
+        // 객체 시작이 아니면 — number 형식 가능
+        if (cleaned[i] !== '{') {
+            // number array 형식? "selected": [0, 3, 7]
+            const numMatch = cleaned.slice(i).match(/^(\d+)/);
+            if (numMatch) {
+                items.push({ k: Number(numMatch[1]) });
+                i += numMatch[0].length;
+                continue;
+            }
+            break;
+        }
+
+        // 객체 — 짝맞는 } 찾기
+        let depth = 0;
+        let inString = false;
+        let escape = false;
+        const start = i;
+        let foundEnd = -1;
+        for (let j = i; j < len; j++) {
+            const ch = cleaned[j];
+            if (escape) { escape = false; continue; }
+            if (ch === '\\') { escape = true; continue; }
+            if (ch === '"') { inString = !inString; continue; }
+            if (inString) continue;
+            if (ch === '{') depth++;
+            else if (ch === '}') {
+                depth--;
+                if (depth === 0) { foundEnd = j; break; }
+            }
+        }
+        if (foundEnd === -1) break; // 잘림 — 더 못 파싱
+
+        try {
+            const obj = JSON.parse(cleaned.slice(start, foundEnd + 1));
+            items.push(obj);
+        } catch { /* 개별 객체 파싱 실패 — skip */ }
+        i = foundEnd + 1;
+    }
+
+    return items.length > 0 ? items : null;
+}
+
+/**
  * 마지막 주입 토큰 정보 (UI용). selectEntries가 inject 시 업데이트.
  */
 export function getLastInjectionStats() {
@@ -275,8 +357,8 @@ Maximum ${aiSelectK} entries. Output ONLY the JSON object.`;
     try {
         const profileOverride = settings.selectionProfileId || settings.profileId || '';
         const timeoutMs = settings.selectionTimeoutMs || 30000;
-        // Promise.race로 timeout 적용
-        const llmPromise = callLLM(systemPrompt, userPrompt, 1500, settings, profileOverride);
+        // Promise.race로 timeout 적용. maxTokens 3000 — K=20까지 안전 마진
+        const llmPromise = callLLM(systemPrompt, userPrompt, 3000, settings, profileOverride);
         const timeoutPromise = new Promise((_, reject) =>
             setTimeout(() => reject(new Error(`AI selection timeout (${timeoutMs}ms)`)), timeoutMs),
         );
@@ -288,7 +370,20 @@ Maximum ${aiSelectK} entries. Output ONLY the JSON object.`;
             console.log(`${LOG_PREFIX} AI raw response:`, cleaned.length > 800 ? cleaned.substring(0, 800) + '...' : cleaned);
         }
 
-        const parsed = JSON.parse(cleaned);
+        // 1차: 정상 JSON 파싱 시도
+        // 실패하면 (truncated 등) salvage — 완성된 selected items만 추출
+        let parsed;
+        try {
+            parsed = JSON.parse(cleaned);
+        } catch (parseErr) {
+            const salvaged = salvageSelectedArray(cleaned);
+            if (salvaged && salvaged.length > 0) {
+                console.warn(`${LOG_PREFIX} JSON truncated — salvaged ${salvaged.length} entries from partial response`);
+                parsed = { selected: salvaged };
+            } else {
+                throw parseErr; // salvage 실패 → catch 블록으로
+            }
+        }
 
         // robust 파싱 — 모델별 응답 형식 다양성 대응
         // 받아들이는 형식들:

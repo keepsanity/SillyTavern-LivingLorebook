@@ -14,6 +14,55 @@ import { insertEntries, deleteEntries, getCollectionId, getEntryHash } from './v
 
 const LOG_PREFIX = '[LivingLorebook]';
 
+// 유효 카테고리 + 한글 매핑 + 흔한 잘못된 값 매핑
+const VALID_CATEGORIES = new Set([
+    'character', 'relationship', 'location', 'event', 'routine', 'item', 'fact',
+]);
+const CATEGORY_ALIASES = {
+    // 한글
+    '캐릭터': 'character', '인물': 'character', '캐릭': 'character',
+    '관계': 'relationship', '관계성': 'relationship',
+    '장소': 'location', '위치': 'location', '공간': 'location',
+    '사건': 'event', '이벤트': 'event', '사고': 'event',
+    '일상': 'routine', '루틴': 'routine', '습관': 'routine',
+    '아이템': 'item', '물건': 'item', '소품': 'item',
+    '설정': 'fact', '사실': 'fact', '정보': 'fact', '배경': 'fact', '룰': 'fact',
+    // 영어 변형
+    'characters': 'character', 'char': 'character', 'person': 'character', 'people': 'character',
+    'relationships': 'relationship', 'rel': 'relationship',
+    'locations': 'location', 'place': 'location', 'places': 'location', 'setting': 'location',
+    'events': 'event', 'scene': 'event', 'moment': 'event',
+    'routines': 'routine', 'habit': 'routine', 'habits': 'routine',
+    'items': 'item', 'object': 'item', 'objects': 'item',
+    'facts': 'fact', 'info': 'fact', 'information': 'fact', 'background': 'fact', 'lore': 'fact', 'rule': 'fact', 'rules': 'fact',
+};
+
+/**
+ * AI가 준 category 값을 유효한 영어 카테고리로 정규화.
+ * 1) 이미 유효하면 그대로
+ * 2) alias 매핑 (한글, 변형)
+ * 3) title 휴리스틱 (시간 단서 → event)
+ * 4) fact 폴백 + 경고
+ */
+function normalizeCategory(item) {
+    const raw = (item.category || '').toString().toLowerCase().trim();
+    if (VALID_CATEGORIES.has(raw)) return raw;
+
+    // alias 매핑 (원본 + 소문자 둘 다 시도)
+    const aliasMatch = CATEGORY_ALIASES[item.category] || CATEGORY_ALIASES[raw];
+    if (aliasMatch) return aliasMatch;
+
+    // title 휴리스틱
+    const title = (item.title || '').toLowerCase();
+    if (/day\s*\d|saturday|sunday|monday|tuesday|wednesday|thursday|friday|\d\s*(am|pm)|\d:\d|오전|오후|월요일|화요일|수요일|목요일|금요일|토요일|일요일|첫|처음|^event\b/.test(title)) {
+        console.warn(`${LOG_PREFIX} Category "${item.category}" invalid → inferred 'event' from title "${item.title}"`);
+        return 'event';
+    }
+
+    console.warn(`${LOG_PREFIX} Category "${item.category}" invalid for title "${item.title}" → defaulting to 'fact'`);
+    return 'fact';
+}
+
 // ============================================================
 // Organize — 대화 분석 후 로어북 갱신
 // ============================================================
@@ -109,11 +158,12 @@ CRITICAL: Before adding ANY new entry, check if similar information already exis
     // 1. 새 엔트리 추가
     if (Array.isArray(instructions.add)) {
         for (const item of instructions.add) {
+            const normalizedCat = normalizeCategory(item);
             const entry = await createEntry(settings.targetLorebook, data, {
                 title: item.title || 'untitled',
                 content: item.content || '',
                 keywords: item.keywords || [item.title],
-                category: item.category || 'fact',
+                category: normalizedCat,
                 summary: typeof item.summary === 'string' ? item.summary : '',
             });
             if (entry) {

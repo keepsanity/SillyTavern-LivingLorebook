@@ -71,8 +71,14 @@ async function callProfileAPI(systemPrompt, userPrompt, maxTokens, profileId) {
     } else if (typeof response?.text === 'string') {
         // Gemini / 일부 ST connection 형식 — { text: "..." }
         text = response.text;
+    } else if (Array.isArray(response?.content)) {
+        // Anthropic 형식 — { content: [{ type: "text", text: "..." }, ...] }
+        const textBlock = response.content.find(b => b?.type === 'text' && typeof b.text === 'string');
+        text = textBlock?.text || '';
+    } else if (typeof response?.content === 'string') {
+        text = response.content;
     } else {
-        text = response?.content || response?.message || '';
+        text = response?.message || '';
     }
 
     return stripThinkTags(text.trim());

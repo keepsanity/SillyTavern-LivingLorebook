@@ -155,6 +155,13 @@ Categories to extract (only create entries for categories where something actual
 6. **item** — Objects acquired, lost, used, gifted, or mentioned as significant
 7. **fact** — World rules, lore, background info revealed
 
+**CRITICAL — category field rules:**
+- The "category" field MUST be one of these EXACT lowercase English strings:
+  \`character\`, \`relationship\`, \`location\`, \`event\`, \`routine\`, \`item\`, \`fact\`
+- DO NOT translate (no "사건", "캐릭터", etc.). DO NOT use synonyms ("scene", "info", "background").
+- DO NOT make up new categories. If unsure, pick the most specific applicable one — DO NOT default to "fact" unless it's truly world lore/rules.
+- "fact" is ONLY for world rules, lore, or background info revealed. NOT for character traits (use character) or events (use event).
+
 Output a JSON object with these fields:
 - "add": array of new entries, each with { "title", "content", "summary", "keywords": [], "category" }
 - "update": array of entries to modify, each with { "uid", "title", "newContent", "summary", "reason" }
@@ -281,6 +288,12 @@ export function initStore(context) {
     if (typeof _settings.storyArcPrompt === 'string' && !_settings.storyArcPrompt.includes('{{existingEntries}}')) {
         _settings.storyArcPrompt = DEFAULT_SETTINGS.storyArcPrompt;
         console.log('[LivingLorebook] Migrated storyArcPrompt to include {{existingEntries}} placeholder');
+    }
+    // Migration: organizePrompt에 CRITICAL category rules 없으면 default로 교체
+    // (옛 prompt가 category를 강하게 강제 안 해서 AI가 한글/잘못된 값 주고 fact 폴백됨)
+    if (typeof _settings.organizePrompt === 'string' && !_settings.organizePrompt.includes('CRITICAL — category field rules')) {
+        _settings.organizePrompt = DEFAULT_SETTINGS.organizePrompt;
+        console.log('[LivingLorebook] Migrated organizePrompt with strict category rules');
     }
 
     // Migration v2: 메타데이터 키 형식이 uid → lorebookName:uid 로 변경됨
