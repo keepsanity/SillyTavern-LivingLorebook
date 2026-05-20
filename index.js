@@ -2,7 +2,7 @@
  * Living Lorebook — AI 기반 로어북 자동 관리 확장
  *
  * 세계관 생성 + 사건/상태 단위 기억 관리 + 티어별 압축 + 연상 기억
- * tool calling 없이, 수동 트리거, WI 시스템이 주입 처리
+ * 수동 트리거, WI 시스템이 주입 처리
  */
 
 import { event_types } from '../../../events.js';
@@ -45,47 +45,62 @@ let isProcessing = false;
 let currentView = 'timeline'; // 'timeline' | 'settings'
 let activeFilter = 'all';
 
-const METADATA_KEY = 'living_lorebook';
+// ST 내장 chat lorebook과 동일 패턴 — 객체 대신 string 단일 키 (객체는 chat_metadata에서 깨질 가능성)
+const LL_TARGET_KEY = 'll_target_lorebook';
+const LL_SELECTION_KEY = 'll_selection_lorebooks';
+const METADATA_KEY = 'living_lorebook'; // (deprecated, 1회 마이그레이션용)
 
-/**
- * 현재 채팅의 로어북 이름을 chat_metadata에서 읽기
- */
 function getChatLorebook() {
-    return chat_metadata?.[METADATA_KEY]?.targetLorebook || '';
+    return chat_metadata?.[LL_TARGET_KEY] || '';
 }
 
-/**
- * 현재 채팅에 로어북 연결 (chat_metadata에 저장)
- */
 function setChatLorebook(lorebookName) {
-    if (!chat_metadata) return;
-    if (!chat_metadata[METADATA_KEY]) chat_metadata[METADATA_KEY] = {};
-    chat_metadata[METADATA_KEY].targetLorebook = lorebookName;
-    settings.targetLorebook = lorebookName;
+    if (!chat_metadata) {
+        console.warn(`${LOG_PREFIX} chat_metadata unavailable in setChatLorebook`);
+        return;
+    }
+    if (lorebookName) {
+        chat_metadata[LL_TARGET_KEY] = lorebookName;
+    } else {
+        delete chat_metadata[LL_TARGET_KEY];
+    }
+    settings.targetLorebook = lorebookName || '';
     saveSettings();
     saveMetadata();
+    console.log(`${LOG_PREFIX} chat_metadata.${LL_TARGET_KEY} = "${lorebookName}"`);
 }
 
-/**
- * 현재 채팅의 selection 로어북 추가분 (targetLorebook 외 로어북들).
- * targetLorebook은 항상 자동 포함됨 (lore-store 쪽에서 처리).
- *
- * 정책: 채팅별 strict. chat_metadata에 없으면 빈 배열 (다른 채팅 selection 절대 leak 안 됨).
- */
 function getChatSelectionLorebooks() {
-    const arr = chat_metadata?.[METADATA_KEY]?.selectionLorebooks;
-    return Array.isArray(arr) ? arr : [];
+    const raw = chat_metadata?.[LL_SELECTION_KEY];
+    // string으로 저장돼있음 (JSON.stringify 결과) — parse 시도
+    if (typeof raw === 'string' && raw.length > 0) {
+        try {
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch { return []; }
+    }
+    // 옛 array 형식 (마이그레이션 전) 호환
+    if (Array.isArray(raw)) return raw;
+    return [];
 }
 
 function setChatSelectionLorebooks(arr) {
-    if (!chat_metadata) return;
-    if (!chat_metadata[METADATA_KEY]) chat_metadata[METADATA_KEY] = {};
+    if (!chat_metadata) {
+        console.warn(`${LOG_PREFIX} chat_metadata unavailable in setChatSelectionLorebooks`);
+        return;
+    }
     const cleaned = Array.isArray(arr) ? arr.filter(n => typeof n === 'string' && n.length > 0) : [];
-    chat_metadata[METADATA_KEY].selectionLorebooks = cleaned;
+    if (cleaned.length > 0) {
+        // ST가 chat_metadata에 array 안 보존하는 듯 — JSON.stringify로 string 저장
+        chat_metadata[LL_SELECTION_KEY] = JSON.stringify(cleaned);
+    } else {
+        delete chat_metadata[LL_SELECTION_KEY];
+    }
     settings.selectionLorebooks = cleaned;
     saveSettings();
     saveMetadata();
     clearSelectionCache();
+    console.log(`${LOG_PREFIX} chat_metadata.${LL_SELECTION_KEY} = ${JSON.stringify(cleaned)}`);
 }
 
 // ============================================================
@@ -101,8 +116,10 @@ async function init() {
     settings = initStore(context);
     initLLMService(context);
 
-    // chat_metadata 복원 — 패널 만들기 전에 settings가 정확한 상태여야 카드 첫 렌더가 맞음
-    restoreChatMetadata();
+    // chat_metadata가 이미 ST에 로드된 상태면 즉시 복원 (init 후 CHAT_CHANGED가 안 발화할 수도 있음)
+    if (chat_metadata && Object.keys(chat_metadata).length > 0) {
+        restoreChatMetadata();
+    }
 
     // Load sidebar settings
     await loadSidebarSettings();
@@ -131,19 +148,28 @@ async function init() {
  * - 없음 → settings를 명시적으로 비움 (다른 채팅의 selection이 leak되지 않게)
  */
 function restoreChatMetadata() {
-    const stored = chat_metadata?.[METADATA_KEY];
-
-    if (!stored) {
-        // 새 채팅 / LL 데이터 없는 채팅 — strict reset
+    if (!chat_metadata) {
         settings.targetLorebook = '';
         settings.selectionLorebooks = [];
         return;
     }
 
-    settings.targetLorebook = typeof stored.targetLorebook === 'string' ? stored.targetLorebook : '';
-    settings.selectionLorebooks = Array.isArray(stored.selectionLorebooks)
-        ? [...stored.selectionLorebooks]
-        : [];
+    // 옛 객체 키 1회 마이그레이션 (있으면 새 단일 키로 옮김)
+    const legacy = chat_metadata[METADATA_KEY];
+    if (legacy && typeof legacy === 'object') {
+        if (typeof legacy.targetLorebook === 'string' && !chat_metadata[LL_TARGET_KEY]) {
+            chat_metadata[LL_TARGET_KEY] = legacy.targetLorebook;
+        }
+        if (Array.isArray(legacy.selectionLorebooks) && !chat_metadata[LL_SELECTION_KEY]) {
+            chat_metadata[LL_SELECTION_KEY] = JSON.stringify(legacy.selectionLorebooks);
+        }
+        delete chat_metadata[METADATA_KEY];
+        try { saveMetadata(); } catch { /* noop */ }
+        console.log(`${LOG_PREFIX} Migrated legacy chat_metadata.${METADATA_KEY} → single keys`);
+    }
+
+    settings.targetLorebook = chat_metadata[LL_TARGET_KEY] || '';
+    settings.selectionLorebooks = getChatSelectionLorebooks();
 }
 
 // ============================================================
@@ -1065,11 +1091,17 @@ function bindSettingsInputs(panel) {
                 toastr.warning('추가할 로어북을 선택해주세요.');
                 return;
             }
-            // chat_metadata 우선 (settings는 stale일 수 있음)
             const current = getChatSelectionLorebooks();
+            console.log(`${LOG_PREFIX} Add attempt:`, {
+                val,
+                target: settings.targetLorebook,
+                current_from_chat_metadata: current,
+                chat_metadata_raw: chat_metadata?.[LL_SELECTION_KEY],
+                settings_selection: settings.selectionLorebooks,
+            });
             if (val === settings.targetLorebook) {
                 toastr.info(`"${val}"은 이미 target 로어북입니다 (자동 포함).`);
-                populateAddLorebookDropdown(panel); // 옛날 옵션 정리
+                populateAddLorebookDropdown(panel);
                 return;
             }
             if (current.includes(val)) {
@@ -1147,6 +1179,13 @@ function switchView(view) {
         toolbar.style.display = 'none';
         settingsView.classList.add('active');
         settingsBtn.className = 'fa-solid fa-arrow-left';
+        // 매 settings view 진입 시 카드 리스트 + dropdown 강제 재렌더 (stale 방지)
+        const panel = document.querySelector('.ll-panel');
+        if (panel) {
+            renderSelectionLorebookList(panel);
+            populateAddLorebookDropdown(panel);
+            populateTargetLorebookDropdown(panel);
+        }
     } else {
         timeline.style.display = '';
         filterBar.style.display = '';
