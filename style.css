@@ -600,6 +600,8 @@
     color: var(--SmartThemeBodyColor, #aaa);
     line-height: 1.6;
     opacity: 0.85;
+    white-space: pre-wrap;  /* \n 개행 보존 + 자동 줄바꿈 */
+    word-break: break-word;
 }
 
 .ll-entry-summary {
