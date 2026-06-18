@@ -418,7 +418,9 @@ export async function createEntry(lorebookName, data, { title, content, keywords
     setWIOriginalDataValue(data, uid, 'comment', title);
 
     // Content: 제목 헤더 + 내용
-    const finalContent = `## ${title}\n${content}`;
+    // 들어온 content에 이미 `## 제목` 헤더가 있으면 제거 후 다시 붙임 (중복 방지, idempotent)
+    const body = (content || '').replace(/^##\s+.*\r?\n?/, '');
+    const finalContent = `## ${title}\n${body}`;
     entry.content = finalContent;
     setWIOriginalDataValue(data, uid, 'content', finalContent);
 
@@ -487,7 +489,9 @@ export function updateEntryContent(data, uid, newContent, lorebookName) {
     if (!entries || !entries[uid]) return false;
 
     const title = entries[uid].comment || 'untitled';
-    const finalContent = `## ${title}\n${newContent}`;
+    // 들어온 newContent에 이미 `## 제목` 헤더가 있으면 제거 후 다시 붙임 (중복 방지, idempotent)
+    const body = (newContent || '').replace(/^##\s+.*\r?\n?/, '');
+    const finalContent = `## ${title}\n${body}`;
     entries[uid].content = finalContent;
     setWIOriginalDataValue(data, uid, 'content', finalContent);
 

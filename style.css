@@ -1471,3 +1471,42 @@ dialog.ll-range-modal::backdrop {
     background: rgba(104, 211, 145, 0.2) !important;
     border-color: rgba(104, 211, 145, 0.5) !important;
 }
+
+/* ============================================================
+   Selection Progress Indicator — 입력창 위 플로팅 칩 + 전송버튼 펄스
+   ============================================================ */
+
+#form_sheld:has(.ll-selecting-pill) {
+    position: relative;
+}
+
+.ll-selecting-pill {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, rgba(99, 179, 237, 0.25) 0%, rgba(129, 230, 217, 0.18) 100%);
+    border: 1px solid rgba(99, 179, 237, 0.5);
+    color: #63b3ed;
+    font-size: 12px;
+    white-space: nowrap;
+    z-index: 31000;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 2px 12px rgba(99, 179, 237, 0.2);
+    animation: ll-fade-in 0.2s ease;
+    pointer-events: none;
+}
+
+#send_but.ll-selecting {
+    animation: ll-send-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes ll-send-pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 0.9; }
+}

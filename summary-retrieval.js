@@ -173,6 +173,38 @@ async function measureAndStoreInjectionStats(entries, fromCache) {
 }
 
 // ============================================================
+// Selection Progress Indicator — AI 호출 동안 입력창 위 플로팅 칩 + 전송버튼 펄스
+// (캐시 hit / direct 경로는 즉시 끝나므로 실제 LLM 호출 구간에만 표시)
+// ============================================================
+
+let _indicatorSafetyTimer = null;
+
+function showSelectionIndicator(timeoutMs) {
+    try {
+        const formSheld = document.getElementById('form_sheld');
+        if (formSheld && !formSheld.querySelector('.ll-selecting-pill')) {
+            const pill = document.createElement('div');
+            pill.className = 'll-selecting-pill';
+            pill.innerHTML = '<i class="fa-solid fa-brain fa-fade"></i> 로어 선택 중…';
+            formSheld.appendChild(pill);
+        }
+        document.getElementById('send_but')?.classList.add('ll-selecting');
+        // 안전망: timeout + 5초가 지나도 남아있으면 강제 제거
+        clearTimeout(_indicatorSafetyTimer);
+        _indicatorSafetyTimer = setTimeout(hideSelectionIndicator, (timeoutMs || 30000) + 5000);
+    } catch { /* 표시 실패가 선택 흐름을 막지 않게 */ }
+}
+
+function hideSelectionIndicator() {
+    try {
+        clearTimeout(_indicatorSafetyTimer);
+        _indicatorSafetyTimer = null;
+        document.querySelector('#form_sheld .ll-selecting-pill')?.remove();
+        document.getElementById('send_but')?.classList.remove('ll-selecting');
+    } catch { /* ignore */ }
+}
+
+// ============================================================
 // Public API
 // ============================================================
 
@@ -328,6 +360,7 @@ async function _selectEntriesImpl(chat) {
 
     // AI 선택 — short id (인덱스) 기반 manifest로 토큰 절약
     const tLlm = performance.now();
+    showSelectionIndicator(settings.selectionTimeoutMs || 30000);
     const manifest = prefiltered.map((c, i) => {
         const lbTag = lorebooks.length > 1 ? ` <${c.lorebookName}>` : '';
         return `[k:${i}]${lbTag} ${c.title}\n  ${c.summary}`;
@@ -431,6 +464,8 @@ Maximum ${aiSelectK} entries. Output ONLY the JSON object.`;
                 { timeOut: 4000 },
             );
         }
+    } finally {
+        hideSelectionIndicator();
     }
 
     // 폴백 우선순위:
