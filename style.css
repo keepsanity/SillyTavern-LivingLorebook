@@ -3,27 +3,9 @@
    ============================================================ */
 
 /* ── Sidebar Settings (minimal) ── */
-.ll_settings {
+/* drawer 헤더는 다른 확장과 동일하게 기본 크기 유지 — content만 키움 */
+.ll_settings .inline-drawer-content {
     font-size: 14px;
-}
-
-.ll_settings > .inline-drawer > .inline-drawer-toggle {
-    background: linear-gradient(135deg, rgba(99, 179, 237, 0.15) 0%, rgba(129, 230, 217, 0.12) 100%);
-    padding: 10px 12px;
-    border-radius: 8px;
-    transition: background 0.2s ease;
-}
-
-.ll_settings > .inline-drawer > .inline-drawer-toggle:hover {
-    background: linear-gradient(135deg, rgba(99, 179, 237, 0.25) 0%, rgba(129, 230, 217, 0.18) 100%);
-}
-
-.ll_settings > .inline-drawer > .inline-drawer-toggle b {
-    background: linear-gradient(135deg, #63b3ed 0%, #81e6d9 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    font-size: 15px;
 }
 
 .ll-row {
@@ -131,6 +113,45 @@
     justify-content: center;
     padding: 0 4px;
     line-height: 1;
+}
+
+/* ============================================================
+   AI Selection Progress Indicator (입력창 위 플로팅 칩 + 전송버튼 펄스)
+   ============================================================ */
+
+#form_sheld:has(.ll-selecting-pill) {
+    position: relative;
+}
+
+.ll-selecting-pill {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, rgba(99, 179, 237, 0.25) 0%, rgba(129, 230, 217, 0.18) 100%);
+    border: 1px solid rgba(99, 179, 237, 0.5);
+    color: #63b3ed;
+    font-size: 12px;
+    white-space: nowrap;
+    z-index: 31000;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 2px 12px rgba(99, 179, 237, 0.2);
+    animation: ll-fade-in 0.2s ease;
+    pointer-events: none;
+}
+
+#send_but.ll-selecting {
+    animation: ll-send-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes ll-send-pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 0.9; }
 }
 
 /* ============================================================

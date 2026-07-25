@@ -12,13 +12,21 @@
 import { callLLM } from './llm-service.js';
 import {
     getSettings,
+    saveSettings,
     getMetadata,
     getEffectiveSelectionLorebooks,
     loadAnyLorebook,
     isManagedMode,
     countTokens,
 } from './lore-store.js';
-import { getStringHash } from './vector-service.js';
+import {
+    getStringHash,
+    queryMultipleCollections,
+    getCollectionId,
+    reindexCollection,
+    getVectorSourceSignature,
+    getEmbedMaxChars,
+} from './vector-service.js';
 import { buildBM25 } from './bm25.js';
 
 const LOG_PREFIX = '[LivingLorebook]';
@@ -133,6 +141,38 @@ function salvageSelectedArray(cleaned) {
     return items.length > 0 ? items : null;
 }
 
+// ============================================================
+// Selection Progress Indicator — AI 호출 동안 입력창 위 플로팅 칩 + 전송버튼 펄스
+// (캐시 hit / direct 경로는 즉시 끝나므로 실제 LLM 호출 구간에만 표시)
+// ============================================================
+
+let _indicatorSafetyTimer = null;
+
+function showSelectionIndicator(timeoutMs) {
+    try {
+        const formSheld = document.getElementById('form_sheld');
+        if (formSheld && !formSheld.querySelector('.ll-selecting-pill')) {
+            const pill = document.createElement('div');
+            pill.className = 'll-selecting-pill';
+            pill.innerHTML = '<i class="fa-solid fa-brain fa-fade"></i> 로어 선택 중…';
+            formSheld.appendChild(pill);
+        }
+        document.getElementById('send_but')?.classList.add('ll-selecting');
+        // 안전망: timeout + 5초가 지나도 남아있으면 강제 제거
+        clearTimeout(_indicatorSafetyTimer);
+        _indicatorSafetyTimer = setTimeout(hideSelectionIndicator, (timeoutMs || 30000) + 5000);
+    } catch { /* 표시 실패가 선택 흐름을 막지 않게 */ }
+}
+
+function hideSelectionIndicator() {
+    try {
+        clearTimeout(_indicatorSafetyTimer);
+        _indicatorSafetyTimer = null;
+        document.querySelector('#form_sheld .ll-selecting-pill')?.remove();
+        document.getElementById('send_but')?.classList.remove('ll-selecting');
+    } catch { /* ignore */ }
+}
+
 /**
  * 마지막 주입 토큰 정보 (UI용). selectEntries가 inject 시 업데이트.
  */
@@ -173,38 +213,6 @@ async function measureAndStoreInjectionStats(entries, fromCache) {
 }
 
 // ============================================================
-// Selection Progress Indicator — AI 호출 동안 입력창 위 플로팅 칩 + 전송버튼 펄스
-// (캐시 hit / direct 경로는 즉시 끝나므로 실제 LLM 호출 구간에만 표시)
-// ============================================================
-
-let _indicatorSafetyTimer = null;
-
-function showSelectionIndicator(timeoutMs) {
-    try {
-        const formSheld = document.getElementById('form_sheld');
-        if (formSheld && !formSheld.querySelector('.ll-selecting-pill')) {
-            const pill = document.createElement('div');
-            pill.className = 'll-selecting-pill';
-            pill.innerHTML = '<i class="fa-solid fa-brain fa-fade"></i> 로어 선택 중…';
-            formSheld.appendChild(pill);
-        }
-        document.getElementById('send_but')?.classList.add('ll-selecting');
-        // 안전망: timeout + 5초가 지나도 남아있으면 강제 제거
-        clearTimeout(_indicatorSafetyTimer);
-        _indicatorSafetyTimer = setTimeout(hideSelectionIndicator, (timeoutMs || 30000) + 5000);
-    } catch { /* 표시 실패가 선택 흐름을 막지 않게 */ }
-}
-
-function hideSelectionIndicator() {
-    try {
-        clearTimeout(_indicatorSafetyTimer);
-        _indicatorSafetyTimer = null;
-        document.querySelector('#form_sheld .ll-selecting-pill')?.remove();
-        document.getElementById('send_but')?.classList.remove('ll-selecting');
-    } catch { /* ignore */ }
-}
-
-// ============================================================
 // Public API
 // ============================================================
 
@@ -240,7 +248,7 @@ async function _selectEntriesImpl(chat) {
     }
 
     // 모든 managed selection 로어북에서 후보 수집
-    const candidates = []; // { compositeKey, lorebookName, uid, title, content, category, summary }
+    let candidates = []; // { compositeKey, lorebookName, uid, title, content, category, summary }
     for (const lbName of lorebooks) {
         const data = await loadAnyLorebook(lbName);
         if (!data || !data.entries) continue;
@@ -250,7 +258,8 @@ async function _selectEntriesImpl(chat) {
             if (entry.constant) continue;
             const meta = getMetadata(uid, lbName);
             const summary = (meta?.summary || '').trim();
-            if (!summary) continue;
+            // summary 없는 엔트리도 후보에 포함 — 벡터 엔진은 title+content 임베딩으로 검색 (summary 불필요).
+            // AI 엔진 경로에서만 아래에서 summary 있는 것으로 필터링.
             candidates.push({
                 compositeKey: `${lbName}::${uid}`,
                 lorebookName: lbName,
@@ -272,15 +281,38 @@ async function _selectEntriesImpl(chat) {
     // 채팅 컨텍스트
     const scanDepth = settings.selectionScanDepth || 8;
     const filtered = chat.filter(m => !m.is_system && !m.is_hidden);
-    const recentChat = filtered.slice(-scanDepth);
-    const chatText = recentChat.map(m => {
+    const formatMessages = (msgs) => msgs.map(m => {
         const name = m.is_user ? 'User' : (m.name || 'Character');
         return `${name}: ${m.mes}`;
     }).join('\n');
 
+    const chatText = formatMessages(filtered.slice(-scanDepth));
+
+    // 벡터는 더 좁은 창을 쓴다.
+    // 긴 창을 하나의 벡터로 뭉개면 여러 장면이 평균나서 "대화 전반의 평균 주제"를 찾게 된다
+    // → 지금 장면에 맞는 로어가 흐려짐. 게다가 임베딩 비용은 입력 길이에 비례한다.
+    // BM25는 반대로 넓은 창이 유리하다 (앞쪽에서 언급된 고유명사를 잡아줌, 비용도 거의 0).
+    const vectorDepth = Math.max(1, Math.min(settings.vectorScanDepth || 4, scanDepth));
+    const vectorText = buildRecentQueryText(filtered.slice(-vectorDepth), formatMessages, getEmbedMaxChars());
+
     if (!chatText.trim()) {
         await measureAndStoreInjectionStats([], false);
         return { entries: [], fromCache: false, stage: 'empty-chat' };
+    }
+
+    // === 엔진 분기 ===
+    // 기본 'hybrid': BM25 + 벡터를 RRF로 융합 → 즉시 (AI/manifest/캐시 전부 스킵)
+    // 'vector' = 벡터만, 'bm25' = 벡터 없이 텍스트 매칭만 (임베딩 의존성 0)
+    const engine = settings.selectionEngine || 'hybrid';
+    if (engine !== 'ai') {
+        return await _selectFast(candidates, { bm25: chatText, vector: vectorText }, settings, lorebooks, engine);
+    }
+
+    // 이하 'ai' 엔진 — manifest 힌트가 필요하므로 summary 있는 후보만 사용
+    candidates = candidates.filter(c => c.summary);
+    if (candidates.length === 0) {
+        await measureAndStoreInjectionStats([], false);
+        return { entries: [], fromCache: false, stage: 'no-candidates-ai (no summaries)' };
     }
 
     // 슬라이딩 윈도우 캐시 키 — 마지막이 assistant인 경우에만 잘라냄.
@@ -509,4 +541,263 @@ Maximum ${aiSelectK} entries. Output ONLY the JSON object.`;
     await measureAndStoreInjectionStats(selectedEntries, false);
     console.log(`${LOG_PREFIX} Selection: ${selectedEntries.length} chosen from ${prefiltered.length} | bm25 ${bm25Ms.toFixed(0)}ms · llm ${llmMs.toFixed(0)}ms | ${stage}, ${prefilterStage}, ${lorebooks.length} lorebook${lorebooks.length > 1 ? 's' : ''}`);
     return { entries: selectedEntries, fromCache: false, stage: `${stage} (${prefilterStage})` };
+}
+
+// ============================================================
+// Fast engine — BM25 + 벡터 하이브리드 (RRF 융합). AI 호출 없음.
+// ============================================================
+
+/**
+ * ST의 /api/vector/query는 유사도 점수를 안 돌려주고 hash/metadata만 준다
+ * (src/endpoints/vectors.js queryCollection — score는 threshold 필터에만 쓰이고 버려짐).
+ * 그래서 점수 대신 **순위**로 융합한다 → RRF(Reciprocal Rank Fusion).
+ * 덕분에 ST 코어를 패치할 필요가 없고 ST 업데이트에도 안 깨진다.
+ *
+ * score(entry) = wV/(K + rank_vector) + wB/(K + rank_bm25)
+ * 두 목록에 다 오른 엔트리가 자연히 위로 올라온다.
+ */
+const RRF_K = 60;
+
+/** 소스 불일치 경고를 매 생성마다 띄우지 않기 위한 1회 플래그 */
+let _sigWarned = null;
+
+/**
+ * BM25 랭커 생성 — 벡터 경로와 폴백 경로가 같은 문서 표현을 쓰도록 한 곳에 모음.
+ */
+function buildCandidateRanker(candidates) {
+    return buildBM25(candidates, {
+        titleOf: c => c.title || '',
+        textOf: c => `${c.title || ''} ${c.summary || ''} ${(c.content || '').slice(0, 1500)}`,
+    });
+}
+
+/**
+ * 임베딩 예산에 맞춰 **최신 메시지부터 역순으로** 담아 벡터 쿼리 텍스트를 만든다.
+ *
+ * 그냥 긴 텍스트를 넘기면 vector-service가 `slice(0, max)`로 앞을 남기는데,
+ * 채팅은 뒤쪽이 최신이라 정작 방금 일어난 일이 통째로 잘려나간다.
+ * 메시지 경계에서 끊어 담고, 마지막에 시간순으로 되돌린다.
+ *
+ * @param {object[]} msgs - 시간순 메시지 (오래된 것 → 최신)
+ * @param {(msgs: object[]) => string} format - 메시지 배열 → 텍스트
+ * @param {number} maxChars - 임베딩 입력 한도
+ */
+function buildRecentQueryText(msgs, format, maxChars) {
+    const picked = [];
+    let used = 0;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+        const line = format([msgs[i]]);
+        const cost = line.length + (picked.length > 0 ? 1 : 0);  // 개행 1자
+        if (used + cost > maxChars) {
+            // 최신 메시지 하나만으로도 예산 초과 → 그 메시지의 **뒷부분**을 살린다
+            if (picked.length === 0) picked.push(line.slice(-maxChars));
+            break;
+        }
+        picked.push(line);
+        used += cost;
+    }
+    return picked.reverse().join('\n');
+}
+
+/**
+ * 벡터 컬렉션들을 한 번에 query → 후보별 순위(1-based) 맵.
+ * 컬렉션마다 순위가 따로 매겨지지만 RRF는 그 상태로도 잘 동작한다.
+ * @param {string} queryText - 벡터 전용 검색 텍스트 (BM25보다 좁은 창)
+ * @returns {Promise<{ranks: Map<string, number>, ms: number, note: string}>}
+ */
+async function _vectorRanks(candidates, queryText, settings, lorebooks) {
+    const topK = settings.vectorSelectTopK || 50;
+    const threshold = typeof settings.vectorScoreThreshold === 'number' ? settings.vectorScoreThreshold : 0.6;
+
+    // 임베딩 소스가 재색인 시점과 다르면 벡터 차원이 안 맞아 검색이 무의미/에러 →
+    // 조용히 틀린 결과를 주느니 벡터를 끄고 BM25로만 간다.
+    const currentSig = getVectorSourceSignature();
+    const indexedSig = settings.vectorIndexSignature;
+    if (indexedSig && indexedSig !== currentSig) {
+        if (_sigWarned !== currentSig) {
+            _sigWarned = currentSig;
+            console.warn(`${LOG_PREFIX} 임베딩 소스 변경 감지: 인덱스=${indexedSig}, 현재=${currentSig} → 벡터 경로 중단. 재색인 필요.`);
+            // 생성 직전 경로라 여기서 던지면 답변이 막힘 — 알림 실패는 삼킨다
+            globalThis.toastr?.warning?.('임베딩 소스가 바뀌었습니다. LL 설정에서 벡터 재색인을 실행하세요.', 'LivingLorebook', { timeOut: 8000 });
+        }
+        return { ranks: new Map(), ms: 0, note: 'source-changed' };
+    }
+
+    // 해시(uid only) → candidate. uid는 컬렉션 내에서만 유일하므로 로어북 스코프로 키 구성
+    const byKey = new Map();
+    for (const c of candidates) {
+        byKey.set(`${c.lorebookName}:${getStringHash(String(c.uid))}`, c);
+    }
+
+    // collectionId → 로어북 이름 (응답이 collectionId로 그룹지어 오므로 되돌려야 함)
+    const idToLb = new Map(lorebooks.map(lb => [getCollectionId(lb), lb]));
+
+    const t0 = performance.now();
+    const ranks = new Map();
+    let note = '';
+    try {
+        // 컬렉션마다 /query를 부르면 검색 텍스트를 매번 다시 임베딩한다 → 로어북 수만큼 느려짐.
+        // query-multi는 임베딩 1회 + 컬렉션을 가로질러 전역 정렬 후 topK 컷.
+        const grouped = await queryMultipleCollections([...idToLb.keys()], queryText, topK, threshold);
+        for (const [collectionId, res] of Object.entries(grouped || {})) {
+            const lbName = idToLb.get(collectionId);
+            if (!lbName) continue;
+            const hashes = res?.hashes || [];
+            // 그룹 안의 순서는 전역 정렬 순서를 보존한다. 다만 점수를 안 주므로
+            // 그룹을 가로지르는 정확한 전역 순위는 복원 불가 → 그룹 내 순위를 쓴다.
+            let rank = 0;
+            for (const hash of hashes) {
+                const cand = byKey.get(`${lbName}:${hash}`);
+                if (!cand) continue;   // 인덱스에만 남은 고아 해시 (삭제된 엔트리 등)
+                rank++;
+                if (!ranks.has(cand.compositeKey) || ranks.get(cand.compositeKey) > rank) {
+                    ranks.set(cand.compositeKey, rank);
+                }
+            }
+        }
+    } catch (err) {
+        // 한 번에 조회하므로 실패는 전부 아니면 전무 — BM25 폴백에 맡긴다
+        note = 'query 실패';
+        console.warn(`${LOG_PREFIX} vector query-multi failed: ${err.message}`);
+    }
+
+    // 0개인데 에러도 아니면 "이번 턴엔 의미상 가까운 게 없다"는 정상 결과 — 실패와 구분해서 표시
+    if (ranks.size === 0 && !note) note = `유사도 ${threshold} 미만`;
+
+    return { ranks, ms: performance.now() - t0, note, threshold };
+}
+
+/**
+ * 빠른 선택 — 벡터/BM25/둘 다(RRF)로 후보를 추려 반환. AI 호출 없음.
+ * @param {Array} candidates - summary 무관 전체 후보 (constant/disable 제외됨)
+ * @param {{bm25: string, vector: string}} queries - 엔진별 검색 텍스트 (벡터는 더 좁은 창)
+ * @param {object} settings
+ * @param {string[]} lorebooks - managed 로어북 이름들
+ * @param {'hybrid'|'vector'|'bm25'} engine
+ */
+async function _selectFast(candidates, queries, settings, lorebooks, engine) {
+    const maxK = settings.vectorSelectMaxK || 12;
+    // 0이면 컷오프 끔(기본) — RRF 점수는 순위 기반이라 절대 유사도처럼 해석되지 않음.
+    // 올리면 1등 대비 낮은 꼬리를 잘라낸다.
+    const ratio = typeof settings.vectorCutoffRatio === 'number' ? settings.vectorCutoffRatio : 0;
+    const wV = typeof settings.hybridVectorWeight === 'number' ? settings.hybridVectorWeight : 1;
+    const wB = typeof settings.hybridBm25Weight === 'number' ? settings.hybridBm25Weight : 1;
+
+    const wantVector = engine !== 'bm25';
+    const wantBm25 = engine !== 'vector';
+
+    // --- 1. 벡터 순위 ---
+    let vRanks = new Map();
+    let vecMs = 0;
+    let vecNote = '';
+    let vecThreshold = null;
+    if (wantVector) {
+        const r = await _vectorRanks(candidates, queries.vector, settings, lorebooks);
+        vRanks = r.ranks;
+        vecMs = r.ms;
+        vecNote = r.note;
+        vecThreshold = r.threshold;
+    }
+
+    // --- 2. BM25 순위 ---
+    // hybrid에서 벡터가 아무것도 못 건졌으면(인덱스 없음/소스 변경/서버 오류) BM25로 자동 폴백.
+    const bm25Needed = wantBm25 || vRanks.size === 0;
+    let bRanks = new Map();
+    let bmMs = 0;
+    if (bm25Needed) {
+        const t0 = performance.now();
+        const ranker = buildCandidateRanker(candidates);
+        // 융합 전이므로 maxK보다 넉넉히 뽑아둔다 (벡터가 못 본 걸 BM25가 끌어올릴 여지)
+        const ranked = ranker.search(queries.bm25, Math.max(maxK * 3, settings.bm25PrefilterK || 30));
+        ranked.forEach((r, i) => bRanks.set(r.entry.compositeKey, i + 1));
+        bmMs = performance.now() - t0;
+    }
+
+    if (vRanks.size === 0 && bRanks.size === 0) {
+        await measureAndStoreInjectionStats([], false);
+        const why = wantVector && vecNote ? vecNote : 'no-match';
+        console.warn(`${LOG_PREFIX} Fast(${engine}): 매칭 0개 (${why})`);
+        return { entries: [], fromCache: false, stage: `${engine}-empty (${why})` };
+    }
+
+    // --- 3. RRF 융합 ---
+    const byKey = new Map(candidates.map(c => [c.compositeKey, c]));
+    const fused = new Map(); // key → { candidate, score, v, b }
+    const add = (key, rank, weight, which) => {
+        const cand = byKey.get(key);
+        if (!cand) return;
+        const cur = fused.get(key) || { candidate: cand, score: 0, v: null, b: null };
+        cur.score += weight / (RRF_K + rank);
+        cur[which] = rank;
+        fused.set(key, cur);
+    };
+    for (const [key, rank] of vRanks) add(key, rank, wV, 'v');
+    for (const [key, rank] of bRanks) add(key, rank, wB, 'b');
+
+    const scored = [...fused.values()].sort((a, b) => b.score - a.score);
+
+    // --- 4. 컷오프 + 상한 ---
+    let kept = scored;
+    if (ratio > 0) {
+        const cutoff = scored[0].score * ratio;
+        kept = scored.filter(s => s.score >= cutoff);
+    }
+    kept = kept.slice(0, maxK);
+    if (kept.length === 0) kept = scored.slice(0, 1); // 안전망: 최소 1개
+
+    const entries = kept.map(s => s.candidate);
+    await measureAndStoreInjectionStats(entries, false);
+
+    const both = kept.filter(s => s.v != null && s.b != null).length;
+    // 벡터를 쓰기로 했는데 하나도 못 건졌으면 BM25 폴백이 실제로 동작한 것 — 로그에 드러나게
+    const fellBack = wantVector && vRanks.size === 0;
+    const label = fellBack
+        ? `${engine}→bm25${vecNote ? ' (' + vecNote + ')' : ''}`
+        : engine;
+    console.log(
+        `${LOG_PREFIX} ${label}: ${entries.length} kept / ${scored.length} fused ` +
+        `(vector ${vRanks.size}${vecThreshold != null ? `@${vecThreshold}` : ''}, bm25 ${bRanks.size}, ` +
+        `양쪽 ${both}, maxK ${maxK}${ratio > 0 ? `, ratio ${ratio}` : ''}) ` +
+        `vec ${vecMs.toFixed(0)}ms/${queries.vector.length}자 · bm25 ${bmMs.toFixed(0)}ms/${queries.bm25.length}자, ` +
+        `${lorebooks.length} lorebook${lorebooks.length > 1 ? 's' : ''}`,
+    );
+    return { entries, fromCache: false, stage: `${label} (${entries.length}/${scored.length})` };
+}
+
+/**
+ * managed 로어북 전체 재색인 — 벡터 컬렉션 purge 후 현재 엔트리로 재삽입.
+ * 해시 스킴 변경 / 내용 수정 / 임베딩 소스 변경으로 stale해진 임베딩을 갱신. UI 버튼에서 호출.
+ * @returns {Promise<{lorebooks: number, entries: number, signature: string}>}
+ */
+export async function reindexManagedLorebooks() {
+    const lorebooks = getEffectiveSelectionLorebooks().filter(name => isManagedMode(name));
+    let totalEntries = 0;
+    for (const lbName of lorebooks) {
+        const data = await loadAnyLorebook(lbName);
+        if (!data || !data.entries) continue;
+        const entries = [];
+        for (const [uid, entry] of Object.entries(data.entries)) {
+            if (entry.disable || entry.constant) continue; // 후보 풀과 동일 기준
+            entries.push({ uid: String(uid), content: entry.content || '', title: entry.comment || '' });
+        }
+        if (entries.length === 0) continue;
+        await reindexCollection(getCollectionId(lbName), entries);
+        totalEntries += entries.length;
+        console.log(`${LOG_PREFIX} Reindexed ${entries.length} entries in ${getCollectionId(lbName)}`);
+    }
+
+    // 이 인덱스가 어떤 임베딩 소스로 만들어졌는지 기록 → 이후 소스가 바뀌면 감지 가능.
+    // 색인된 게 하나도 없으면(managed 로어북 없음 등) 기록하지 않는다 —
+    // 안 그러면 "인덱스 일치"가 떠서 정상인 것처럼 보인다.
+    const signature = getVectorSourceSignature();
+    if (totalEntries > 0) {
+        const settings = getSettings();
+        settings.vectorIndexSignature = signature;
+        settings.vectorIndexCount = totalEntries;   // 몇 개가 실제로 들어갔는지 — 상태 표시가 거짓말 못 하게
+        settings.vectorIndexAt = Date.now();
+        saveSettings();
+        _sigWarned = null;
+    }
+
+    return { lorebooks: lorebooks.length, entries: totalEntries, signature };
 }

@@ -82,7 +82,25 @@ export const DEFAULT_SETTINGS = {
     injectionRole: 0, // 0 = system
 
     // Summary 기반 AI 선택 (Phase 2)
-    summarySelectionEnabled: false,    // 마스터 토글 (사용자가 명시적으로 켜야 함)
+    summarySelectionEnabled: false,    // 마스터 토글 (LL이 주입 통제 — 켜면 ST 네이티브 키워드/벡터 off)
+    // 'hybrid' = BM25 + 벡터 RRF 융합 (기본, AI 호출 0)
+    // 'vector' = 벡터만 · 'bm25' = 텍스트 매칭만(임베딩 의존성 0) · 'ai' = 기존 summary AI 선택(정밀·느림)
+    selectionEngine: 'hybrid',
+    vectorScanDepth: 4,                // 벡터 쿼리에 쓸 최근 메시지 수 (selectionScanDepth와 별개, 항상 그 이하)
+    vectorSelectTopK: 50,              // 벡터 쿼리로 컬렉션당 가져올 후보 수 (융합 전 풀)
+    // 유사도 하한 — 서버가 이 점수 미만을 잘라낸다(클라이언트는 점수를 못 받지만 서버는 갖고 있음).
+    // maxK가 "무조건 N개 채우기"인 것과 달리 이건 진짜 관련도 바닥선: 관련 있는 게 적은 턴엔 적게 들어온다.
+    // 점수대는 임베딩 모델마다 다르다. nomic-embed-text 실측(후보 48개):
+    //   0.5 → 34개 생존 · 0.55 → 23개 · 0.6 → 16개 · 0.65 → 11개 · 0.7 → 7개
+    // 0.6이면 maxK(12)보다 약간 넉넉해 BM25가 끼어들 여지를 남기면서 무관한 꼬리는 잘라낸다.
+    vectorScoreThreshold: 0.6,
+    vectorCutoffRatio: 0,              // 상대 컷오프 — 1등 RRF 점수 × 비율 미만 잘라냄. 0이면 끔(maxK만 적용)
+    vectorSelectMaxK: 12,              // 최종 주입 상한 (사용자 조절)
+    hybridVectorWeight: 1,             // RRF 가중치 — 벡터(의미) 쪽
+    hybridBm25Weight: 1,               // RRF 가중치 — BM25(정확한 단어) 쪽
+    vectorIndexSignature: '',          // 현재 벡터 인덱스를 만든 임베딩 소스 "source:model" — 바뀌면 재색인 필요
+    vectorIndexCount: 0,               // 마지막 재색인에서 실제로 들어간 엔트리 수 (0이면 색인된 적 없음)
+    vectorIndexAt: 0,                  // 마지막 재색인 시각
     aiSelectK: 8,                      // AI 최종 선택 개수
     bm25PrefilterEnabled: true,        // BM25 텍스트 매칭 prefilter (vector 대체) — 권장 기본 ON
     bm25PrefilterK: 30,                // BM25 prefilter top-K (Enabled시 후보가 이보다 많을 때만)
@@ -305,6 +323,22 @@ export function initStore(context) {
         }
         _settings._metadataV2 = true;
         console.log(`[LivingLorebook] Migrated ${oldKeys.length} old metadata entries`);
+    }
+
+    // Migration v3: 선택 엔진이 RRF 하이브리드로 바뀜.
+    // 예전 'vector' 엔진은 유사도 점수 × 비율로 컷오프했지만, ST가 점수를 안 돌려줘서
+    // 지금은 순위 기반 RRF를 쓴다 → 옛 기본값 0.85를 그대로 두면 거의 다 잘려나감.
+    // 인덱스도 옛 임베딩 소스로 만들어졌을 수 있으니 시그니처를 비워 재색인을 유도.
+    if (!_settings._selectionEngineV3) {
+        if (_settings.selectionEngine === 'vector') {
+            _settings.selectionEngine = 'hybrid';
+        }
+        if (typeof _settings.vectorCutoffRatio === 'number' && _settings.vectorCutoffRatio > 0) {
+            _settings.vectorCutoffRatio = 0;
+        }
+        _settings.vectorIndexSignature = '';
+        _settings._selectionEngineV3 = true;
+        console.log('[LivingLorebook] Migrated selection engine to RRF hybrid (컷오프 초기화, 재색인 필요)');
     }
 
     return _settings;

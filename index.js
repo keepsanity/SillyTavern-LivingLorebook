@@ -13,7 +13,8 @@ import { initStore, getSettings, saveSettings, loadTargetLorebook, loadAnyLorebo
 import { initLLMService } from './llm-service.js';
 import { generateWorld, reorganizeExisting, suggestWorldEntries, generateFromSuggestions } from './world-builder.js';
 import { organize, compress, backfillSummaries, generateStoryArc } from './memory-manager.js';
-import { selectEntries, clearSelectionCache, getLastInjectionStats } from './summary-retrieval.js';
+import { selectEntries, clearSelectionCache, getLastInjectionStats, reindexManagedLorebooks } from './summary-retrieval.js';
+import { getVectorSourceInfo } from './vector-service.js';
 
 // ============================================================
 // Constants
@@ -560,11 +561,60 @@ function createPanel() {
             <div class="ll-settings-row">
                 <label class="checkbox_label" style="flex:1;">
                     <input id="ll_s_selection_enabled" type="checkbox" />
-                    <span>Summary 기반 AI 선택 사용</span>
+                    <span>LL 자동 주입 사용 <span style="font-size:10px;opacity:0.6;">(마스터 — 켜면 LL이 통제, ST 키워드 off)</span></span>
                 </label>
             </div>
             <div class="ll-settings-row">
-                <label>AI 선택 결과 (top K)</label>
+                <label>선택 엔진</label>
+                <select class="ll-settings-input" id="ll_s_selection_engine">
+                    <option value="hybrid">하이브리드 — BM25 + 벡터 (기본, 빠름)</option>
+                    <option value="vector">벡터만 (의미 검색)</option>
+                    <option value="bm25">BM25만 (임베딩 불필요)</option>
+                    <option value="ai">AI 선택 (정밀, 느림)</option>
+                </select>
+            </div>
+
+            <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:6px;">
+                <div style="font-size:11px;opacity:0.7;line-height:1.4;">
+                    <i class="fa-solid fa-bolt" style="color:#60a5fa;"></i> <b>벡터 설정.</b>
+                    임베딩 소스는 ST <b>Vector Storage</b> 설정을 따라갑니다. 소스/모델을 바꿨거나 엔트리를 많이 고쳤으면 <b>재색인</b>을 돌려주세요.
+                </div>
+                <div id="ll_s_vector_source" style="font-size:11px;opacity:0.8;"></div>
+                <div id="ll_s_conflict_warn" style="font-size:11px;line-height:1.4;"></div>
+                <button class="menu_button" id="ll_s_reindex_btn" style="width:unset;white-space:nowrap;">
+                    <i class="fa-solid fa-database"></i> 벡터 재색인 (managed 전체)
+                </button>
+                <div id="ll_s_reindex_status" style="font-size:11px;opacity:0.7;"></div>
+            </div>
+            <div class="ll-settings-row">
+                <label>벡터 쿼리 범위</label>
+                <input class="ll-settings-input" id="ll_s_vector_scandepth" type="number" min="1" max="50" />
+                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">최근 N개 메시지 — 좁을수록 "지금 장면"에 집중 (BM25는 전체 창 사용)</span>
+            </div>
+            <div class="ll-settings-row">
+                <label>유사도 하한 (threshold)</label>
+                <input class="ll-settings-input" id="ll_s_vector_threshold" type="number" min="0" max="1" step="0.05" />
+                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">관련도 바닥선 — 관련 있는 게 적은 턴엔 적게 들어옴. 0=끔. 콘솔의 <code>vector N@값</code>으로 조절</span>
+            </div>
+            <div class="ll-settings-row">
+                <label>주입 상한 (maxK)</label>
+                <input class="ll-settings-input" id="ll_s_vector_maxk" type="number" min="1" max="50" />
+                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">최대 주입 개수 — 여기가 "다 들어오는" 걸 막는 주 손잡이</span>
+            </div>
+            <div class="ll-settings-row">
+                <label>상대 컷오프 비율</label>
+                <input class="ll-settings-input" id="ll_s_vector_ratio" type="number" min="0" max="1" step="0.05" />
+                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">0 = 끔(권장). 올리면 1등 대비 낮은 꼬리를 추가로 잘라냄</span>
+            </div>
+            <div class="ll-settings-row">
+                <label>RRF 가중치 <span style="font-size:10px;opacity:0.6;">[하이브리드]</span></label>
+                <input class="ll-settings-input" id="ll_s_hybrid_wv" type="number" min="0" max="5" step="0.1" style="max-width:70px;" />
+                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">벡터(의미)</span>
+                <input class="ll-settings-input" id="ll_s_hybrid_wb" type="number" min="0" max="5" step="0.1" style="max-width:70px;" />
+                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">BM25(단어)</span>
+            </div>
+            <div class="ll-settings-row">
+                <label>AI 선택 결과 (top K) <span style="font-size:10px;opacity:0.6;">[AI 엔진]</span></label>
                 <input class="ll-settings-input" id="ll_s_ai_select_k" type="number" min="1" max="30" />
             </div>
             <div class="ll-settings-row">
@@ -989,6 +1039,144 @@ function bindSettingsInputs(panel) {
     bind('#ll_s_ai_select_k', 'aiSelectK');
     bind('#ll_s_bm25_prefilter_k', 'bm25PrefilterK');
 
+    // 선택 엔진 + 벡터 파라미터
+    const ENGINE_LABELS = {
+        hybrid: '하이브리드 (BM25 + 벡터)',
+        vector: '벡터만',
+        bm25: 'BM25만 (임베딩 불필요)',
+        ai: 'AI 선택 (정밀·느림)',
+    };
+    /** 이 엔진이 벡터 인덱스를 필요로 하는가 */
+    const needsVector = (engine) => engine === 'hybrid' || engine === 'vector';
+
+    /**
+     * ST 자체 Vector Storage가 같은 로어북을 **따로** 주입하고 있는지 감지.
+     *
+     * managed 전환은 엔트리의 `vectorized`를 false로 내려 ST의 WI 벡터 활성화를 피하는데,
+     * ST 설정의 "Enabled for all entries"(enabled_for_all)가 켜져 있으면 그 플래그를 무시하고
+     * 전부 벡터화한다 → LL이 고른 것 위에 ST가 top-N을 얹어 이중 주입이 된다.
+     * 조용히 일어나서 원인 찾기가 매우 어려우므로 패널에 상시 경고한다.
+     */
+    function refreshConflictWarning() {
+        const el = panel.querySelector('#ll_s_conflict_warn');
+        if (!el) return;
+        const v = SillyTavern.getContext().extensionSettings?.vectors || {};
+        if (!settings.summarySelectionEnabled || !v.enabled_world_info) {
+            el.innerHTML = '';
+            return;
+        }
+        const forAll = !!v.enabled_for_all;
+        el.innerHTML = `<span style="color:#f87171;">⚠ ST Vector Storage의 <b>"Enable for World Info"</b>가 켜져 있습니다`
+            + (forAll ? ` (+ <b>"Enabled for all entries"</b>) — managed 엔트리의 vectorized=false가 무시되어 <b>LL과 별개로 최대 ${v.max_entries ?? 5}개가 더 주입</b>됩니다.` : ' — LL이 통제하지 않는 엔트리가 따로 주입될 수 있습니다.')
+            + ` LL이 같은 일을 하므로 <b>끄시는 걸 권합니다.</b></span>`;
+    }
+
+    /** 현재 임베딩 소스 + 인덱스 시그니처 일치 여부를 패널에 표시 */
+    function refreshVectorSourceStatus() {
+        refreshConflictWarning();
+        const el = panel.querySelector('#ll_s_vector_source');
+        if (!el) return;
+        const { source, model } = getVectorSourceInfo();
+        const current = `${source}:${model}`;
+        const indexed = settings.vectorIndexSignature || '';
+        const label = `임베딩 소스: <b>${source}</b>${model ? ` / ${model}` : ''}`;
+
+        // managed 로어북이 하나도 없으면 인덱스 상태를 따질 것도 없다 —
+        // LL은 managed 로어북만 읽으므로 선택도 재색인도 대상이 0개다.
+        const managedCount = getEffectiveSelectionLorebooks().filter(name => isManagedMode(name)).length;
+        if (managedCount === 0) {
+            el.innerHTML = `${label} · <span style="color:#f87171;">managed 로어북 0개 — LL이 읽을 대상이 없습니다. 위에서 <b>managed 전환</b>을 눌러주세요</span>`;
+            return;
+        }
+
+        // count가 없으면 실제로 벡터가 들어간 적이 없다는 뜻 (구버전이 0개 색인에도 시그니처를 찍었음)
+        const count = settings.vectorIndexCount || 0;
+        if (!indexed || count === 0) {
+            el.innerHTML = `${label} · <span style="opacity:0.7;">아직 색인 안 됨 — 재색인을 한 번 돌려주세요</span>`;
+        } else if (indexed !== current) {
+            el.innerHTML = `${label} · <span style="color:#f87171;">인덱스는 <b>${indexed}</b>로 만들어짐 — 차원이 달라 검색이 안 됩니다. 재색인 필요</span>`;
+        } else {
+            el.innerHTML = `${label} · <span style="color:#4ade80;">인덱스 일치 (${count}개 색인됨)</span>`;
+        }
+    }
+
+    const engineEl = panel.querySelector('#ll_s_selection_engine');
+    if (engineEl) {
+        engineEl.value = settings.selectionEngine || 'hybrid';
+        engineEl.addEventListener('change', () => {
+            settings.selectionEngine = engineEl.value;
+            saveSettings();
+            clearSelectionCache();
+            toastr.info(`선택 엔진: ${ENGINE_LABELS[engineEl.value] || engineEl.value}`);
+            // 벡터를 쓰는 엔진 + 마스터 ON + 아직 색인 없음이면 자동 재색인 1회.
+            // (이미 색인돼 있으면 사용자가 명시적으로 누를 때만 — 큰 로어북에서 임베딩 비용이 든다)
+            if (needsVector(engineEl.value) && settings.summarySelectionEnabled && !settings.vectorIndexSignature) {
+                const anyManaged = getEffectiveSelectionLorebooks().some(name => isManagedMode(name));
+                if (anyManaged) performReindex({ silent: true });
+            }
+            refreshVectorSourceStatus();
+        });
+    }
+    bind('#ll_s_vector_ratio', 'vectorCutoffRatio', v => {
+        const n = parseFloat(v);
+        return (Number.isFinite(n) && n >= 0 && n <= 1) ? n : 0;
+    });
+    bind('#ll_s_vector_maxk', 'vectorSelectMaxK', v => Math.max(1, Math.min(50, Number(v) || 12)));
+    bind('#ll_s_vector_scandepth', 'vectorScanDepth', v => Math.max(1, Math.min(50, Number(v) || 4)));
+    bind('#ll_s_vector_threshold', 'vectorScoreThreshold', v => {
+        const n = parseFloat(v);
+        return (Number.isFinite(n) && n >= 0 && n < 1) ? n : 0.6;
+    });
+    bind('#ll_s_hybrid_wv', 'hybridVectorWeight', v => {
+        const n = parseFloat(v);
+        return (Number.isFinite(n) && n >= 0) ? n : 1;
+    });
+    bind('#ll_s_hybrid_wb', 'hybridBm25Weight', v => {
+        const n = parseFloat(v);
+        return (Number.isFinite(n) && n >= 0) ? n : 1;
+    });
+    refreshVectorSourceStatus();
+
+    // 벡터 재색인 — 버튼 클릭 + 엔진 켤 때 자동 트리거 공용.
+    // silent=true면 자동 트리거(작은 info 토스트), false면 수동 버튼(success 토스트).
+    let _reindexInflight = false;
+    async function performReindex({ silent = false } = {}) {
+        if (_reindexInflight) return;          // 자동+수동 동시 호출 방지
+        _reindexInflight = true;
+        const btn = panel.querySelector('#ll_s_reindex_btn');
+        const status = panel.querySelector('#ll_s_reindex_status');
+        if (btn) btn.disabled = true;
+        if (status) status.textContent = '재색인 중…';
+        try {
+            const { lorebooks, entries, signature } = await reindexManagedLorebooks();
+            if (entries === 0) {
+                // managed 로어북이 없으면 색인할 게 없다 — 성공으로 위장하지 않는다
+                const warn = 'managed 로어북이 없어 색인할 게 없습니다. 위 목록에서 "managed 전환"을 누르세요.';
+                if (status) status.textContent = warn;
+                toastr.warning(warn, 'LivingLorebook', { timeOut: 6000 });
+            } else {
+                const msg = `재색인 완료: ${lorebooks}개 로어북 · ${entries}개 엔트리 (${signature})`;
+                if (status) status.textContent = msg;
+                if (silent) toastr.info(msg, 'LivingLorebook', { timeOut: 2500 });
+                else toastr.success(msg, 'LivingLorebook');
+            }
+            refreshVectorSourceStatus();
+        } catch (err) {
+            console.error('[LivingLorebook] reindex failed:', err);
+            if (status) status.textContent = `실패: ${err.message}`;
+            toastr.error(`재색인 실패: ${err.message}`, 'LivingLorebook');
+        } finally {
+            if (btn) btn.disabled = false;
+            _reindexInflight = false;
+        }
+    }
+
+    // 벡터 재색인 버튼 (수동)
+    const reindexBtn = panel.querySelector('#ll_s_reindex_btn');
+    if (reindexBtn) {
+        reindexBtn.addEventListener('click', () => performReindex({ silent: false }));
+    }
+
     // Timeout 인풋 (초 ↔ ms)
     const timeoutEl = panel.querySelector('#ll_s_timeout_sec');
     if (timeoutEl) {
@@ -1028,7 +1216,13 @@ function bindSettingsInputs(panel) {
             settings.summarySelectionEnabled = selectionEnabledEl.checked;
             saveSettings();
             clearSelectionCache();
-            toastr.info(`AI 선택 주입: ${settings.summarySelectionEnabled ? 'ON' : 'OFF'}`);
+            const engine = settings.selectionEngine || 'hybrid';
+            toastr.info(`LL 자동 주입: ${settings.summarySelectionEnabled ? `ON (${ENGINE_LABELS[engine] || engine})` : 'OFF'}`);
+            // 켜면서 벡터를 쓰는 엔진인데 아직 색인이 없으면 자동 재색인 1회
+            if (settings.summarySelectionEnabled && needsVector(engine) && !settings.vectorIndexSignature) {
+                performReindex({ silent: true });
+            }
+            refreshVectorSourceStatus();   // ST 이중주입 경고가 이 토글에 달려 있음
         });
     }
 
