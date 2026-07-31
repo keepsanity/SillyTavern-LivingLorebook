@@ -374,6 +374,9 @@ function createPanel() {
             <button class="ll-toolbar-btn build" data-action="build">
                 <i class="fa-solid fa-wand-magic-sparkles"></i> 세계관 생성
             </button>
+            <button class="ll-toolbar-btn add-entry" data-action="add-entry">
+                <i class="fa-solid fa-plus"></i> 새 엔트리
+            </button>
             <button class="ll-toolbar-btn organize" data-action="organize">
                 <i class="fa-solid fa-broom"></i> 기억 정리
             </button>
@@ -410,13 +413,6 @@ function createPanel() {
             <button class="ll-filter-chip" data-filter="routine"><i class="fa-solid fa-clock" style="margin-right:3px;font-size:10px;"></i>일상</button>
             <button class="ll-filter-chip" data-filter="item"><i class="fa-solid fa-gem" style="margin-right:3px;font-size:10px;"></i>아이템</button>
             <button class="ll-filter-chip" data-filter="fact"><i class="fa-solid fa-circle-info" style="margin-right:3px;font-size:10px;"></i>설정</button>
-        </div>
-
-        <!-- 수동 엔트리 추가 (타임라인 상단) -->
-        <div class="ll-timeline-actions" id="ll_timeline_actions">
-            <button class="ll-add-entry-btn" id="ll_add_entry_btn">
-                <i class="fa-solid fa-plus"></i> 새 엔트리
-            </button>
         </div>
 
         <!-- Timeline (main view) -->
@@ -562,10 +558,9 @@ function createPanel() {
             <div class="ll-settings-row">
                 <label>선택 엔진</label>
                 <select class="ll-settings-input" id="ll_s_selection_engine" style="width:unset;flex:1;text-align:left;">
-                    <option value="hybrid">하이브리드 — BM25 + 벡터 (기본, 빠름)</option>
-                    <option value="vector">벡터만 (의미 검색)</option>
-                    <option value="bm25">BM25만 (임베딩 불필요)</option>
-                    <option value="ai">AI 선택 (정밀, 느림)</option>
+                    <option value="hybrid">스마트 (단어+의미) — 기본 권장</option>
+                    <option value="bm25">단어 매칭 (임베딩 불필요·무료)</option>
+                    <option value="ai">AI 정밀 선택 (느림)</option>
                 </select>
             </div>
             <!-- ST 이중주입 경고 — 엔진 무관하게 항상 노출 (managed 로어북에 ST 벡터가 얹힐 수 있음) -->
@@ -576,7 +571,7 @@ function createPanel() {
             <!-- 고급 튜닝 (접이식, 엔진별 표시) -->
             <div class="ll-settings-section-title ll-collapsible collapsed" data-toggle="ll_s_adv_tuning">
                 <i class="fa-solid fa-sliders"></i> 고급 튜닝
-                <span style="font-size:10px;opacity:0.5;font-weight:400;margin-left:auto;">엔진: <span id="ll_s_engine_label">hybrid</span></span>
+                <span style="font-size:10px;opacity:0.5;font-weight:400;margin-left:auto;">엔진: <span id="ll_s_engine_label">스마트</span></span>
                 <i class="fa-solid fa-chevron-down ll-collapse-chevron"></i>
             </div>
             <div class="ll-settings-group collapsed" id="ll_s_adv_tuning">
@@ -1037,9 +1032,6 @@ function bindPanelEvents(panel) {
         btn.addEventListener('click', () => handleToolbarAction(btn.dataset.action));
     });
 
-    // 새 엔트리 (수동 생성)
-    panel.querySelector('#ll_add_entry_btn')?.addEventListener('click', openNewEntryModal);
-
     // Filter chips
     panel.querySelectorAll('.ll-filter-chip[data-filter]').forEach(chip => {
         chip.addEventListener('click', () => {
@@ -1097,18 +1089,19 @@ function bindSettingsInputs(panel) {
     });
 
     // 선택 엔진에 따라 고급 튜닝 파라미터 표시/숨김
+    const ENGINE_SHORT = { hybrid: '스마트', bm25: '단어 매칭', ai: 'AI 정밀' };
     function updateEngineVisibility(engine) {
         const show = {
-            '.ll-eng-fast':   engine !== 'ai',                          // maxK / 컷오프
-            '.ll-eng-vec':    engine === 'hybrid' || engine === 'vector', // 벡터 범위/하한/재색인
-            '.ll-eng-hybrid': engine === 'hybrid',                      // RRF 가중치
-            '.ll-eng-ai':     engine === 'ai',                          // AI K / timeout / prefilter 토글
+            '.ll-eng-fast':   engine !== 'ai',        // maxK / 컷오프
+            '.ll-eng-vec':    engine === 'hybrid',    // 벡터 범위/하한/재색인 (하이브리드만)
+            '.ll-eng-hybrid': engine === 'hybrid',    // RRF 가중치
+            '.ll-eng-ai':     engine === 'ai',        // AI K / timeout / prefilter 토글
         };
         for (const [sel, visible] of Object.entries(show)) {
             panel.querySelectorAll(sel).forEach(el => { el.style.display = visible ? '' : 'none'; });
         }
         const lbl = panel.querySelector('#ll_s_engine_label');
-        if (lbl) lbl.textContent = engine;
+        if (lbl) lbl.textContent = ENGINE_SHORT[engine] || engine;
     }
 
     bind('#ll_s_position', 'entryPosition');
@@ -1183,10 +1176,9 @@ function bindSettingsInputs(panel) {
 
     // 선택 엔진 + 벡터 파라미터
     const ENGINE_LABELS = {
-        hybrid: '하이브리드 (BM25 + 벡터)',
-        vector: '벡터만',
-        bm25: 'BM25만 (임베딩 불필요)',
-        ai: 'AI 선택 (정밀·느림)',
+        hybrid: '스마트 (단어+의미)',
+        bm25: '단어 매칭 (임베딩 불필요)',
+        ai: 'AI 정밀 선택',
     };
     /** 이 엔진이 벡터 인덱스를 필요로 하는가 */
     const needsVector = (engine) => engine === 'hybrid' || engine === 'vector';
@@ -1244,6 +1236,11 @@ function bindSettingsInputs(panel) {
 
     const engineEl = panel.querySelector('#ll_s_selection_engine');
     if (engineEl) {
+        // '벡터만'(vector) 옵션 제거됨 — 기존 저장값은 hybrid로 승격 (하이브리드가 벡터를 포함)
+        if (settings.selectionEngine === 'vector') {
+            settings.selectionEngine = 'hybrid';
+            saveSettings();
+        }
         engineEl.value = settings.selectionEngine || 'hybrid';
         updateEngineVisibility(engineEl.value);   // 초기 표시 상태
         engineEl.addEventListener('change', () => {
@@ -1509,14 +1506,12 @@ function switchView(view) {
     const settingsView = document.getElementById('ll_settings_view');
     const filterBar = document.querySelector('.ll-filter-bar');
     const toolbar = document.querySelector('.ll-toolbar');
-    const addBar = document.getElementById('ll_timeline_actions');
     const settingsBtn = document.querySelector('.ll-btn-settings i');
 
     if (view === 'settings') {
         timeline.style.display = 'none';
         filterBar.style.display = 'none';
         toolbar.style.display = 'none';
-        if (addBar) addBar.style.display = 'none';
         settingsView.classList.add('active');
         settingsBtn.className = 'fa-solid fa-arrow-left';
         // 매 settings view 진입 시 카드 리스트 + dropdown 강제 재렌더 (stale 방지)
@@ -1530,7 +1525,6 @@ function switchView(view) {
         timeline.style.display = '';
         filterBar.style.display = '';
         toolbar.style.display = '';
-        if (addBar) addBar.style.display = '';
         settingsView.classList.remove('active');
         settingsBtn.className = 'fa-solid fa-gear';
         renderTimeline();
@@ -2067,6 +2061,10 @@ async function handleToolbarAction(action) {
         case 'build':
             // 새 워크플로우: 제안 모달 열기
             openSuggestModal();
+            return;
+
+        case 'add-entry':
+            openNewEntryModal();
             return;
 
         case 'build-confirm':

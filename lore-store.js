@@ -76,8 +76,9 @@ export const DEFAULT_SETTINGS = {
 
     // Summary 기반 AI 선택 (Phase 2)
     summarySelectionEnabled: false,    // 마스터 토글 (LL이 주입 통제 — 켜면 ST 네이티브 키워드/벡터 off)
-    // 'hybrid' = BM25 + 벡터 RRF 융합 (기본, AI 호출 0)
-    // 'vector' = 벡터만 · 'bm25' = 텍스트 매칭만(임베딩 의존성 0) · 'ai' = 기존 summary AI 선택(정밀·느림)
+    // 'hybrid' = BM25 + 벡터 RRF 융합 (UI "스마트", 기본, AI 호출 0)
+    // 'bm25' = 텍스트 매칭만(UI "단어 매칭", 임베딩 의존성 0) · 'ai' = summary AI 선택(정밀·느림)
+    // ('vector' 벡터만 옵션은 제거됨 — 하이브리드가 포함하므로 잉여. 저장값은 initStore에서 hybrid로 정규화)
     selectionEngine: 'hybrid',
     vectorScanDepth: 4,                // 벡터 쿼리에 쓸 최근 메시지 수 (selectionScanDepth와 별개, 항상 그 이하)
     vectorSelectTopK: 50,              // 벡터 쿼리로 컬렉션당 가져올 후보 수 (융합 전 풀)
@@ -332,6 +333,12 @@ export function initStore(context) {
         _settings.vectorIndexSignature = '';
         _settings._selectionEngineV3 = true;
         console.log('[LivingLorebook] Migrated selection engine to RRF hybrid (컷오프 초기화, 재색인 필요)');
+    }
+
+    // '벡터만'(vector) 엔진 옵션 제거됨 — 저장값이 무엇이든 무조건 정규화.
+    // (v3 마이그레이션은 1회용 플래그라, 이후 vector로 바꾼 사용자는 여기서 잡는다)
+    if (_settings.selectionEngine === 'vector') {
+        _settings.selectionEngine = 'hybrid';
     }
 
     return _settings;
