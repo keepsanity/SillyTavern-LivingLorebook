@@ -11,7 +11,7 @@ import { world_names, createNewWorldInfo } from '../../../world-info.js';
 import { power_user } from '../../../power-user.js';
 import { initStore, getSettings, saveSettings, loadTargetLorebook, loadAnyLorebook, calculateTierStats, calculateSelectionStorage, getMetadata, DEFAULT_SETTINGS, updateEntryFields, enableEntry, deactivateEntry, deleteEntry, setEntryPinned, saveLorebook, refreshEditor, migrateToManagedMode, getEffectiveSelectionLorebooks, isManagedMode } from './lore-store.js';
 import { initLLMService } from './llm-service.js';
-import { generateWorld, reorganizeExisting, suggestWorldEntries, generateFromSuggestions } from './world-builder.js';
+import { generateWorld, reorganizeExisting, suggestWorldEntries, generateFromSuggestions, createManualEntry } from './world-builder.js';
 import { organize, compress, backfillSummaries, generateStoryArc } from './memory-manager.js';
 import { selectEntries, clearSelectionCache, getLastInjectionStats, reindexManagedLorebooks } from './summary-retrieval.js';
 import { getVectorSourceInfo } from './vector-service.js';
@@ -412,6 +412,13 @@ function createPanel() {
             <button class="ll-filter-chip" data-filter="fact"><i class="fa-solid fa-circle-info" style="margin-right:3px;font-size:10px;"></i>설정</button>
         </div>
 
+        <!-- 수동 엔트리 추가 (타임라인 상단) -->
+        <div class="ll-timeline-actions" id="ll_timeline_actions">
+            <button class="ll-add-entry-btn" id="ll_add_entry_btn">
+                <i class="fa-solid fa-plus"></i> 새 엔트리
+            </button>
+        </div>
+
         <!-- Timeline (main view) -->
         <div class="ll-timeline" id="ll_timeline"></div>
 
@@ -454,18 +461,6 @@ function createPanel() {
                     <option value="hide">하이드 (비활성화, 복구 가능)</option>
                     <option value="delete">삭제 (완전 제거)</option>
                 </select>
-            </div>
-
-            <div class="ll-settings-section-title">
-                <i class="fa-solid fa-magnifying-glass"></i> 벡터 검색
-            </div>
-            <div class="ll-settings-row">
-                <label>검색 결과 수 (Top K)</label>
-                <input class="ll-settings-input" id="ll_s_topk" type="number" min="1" max="50" />
-            </div>
-            <div class="ll-settings-row">
-                <label>유사도 임계값</label>
-                <input class="ll-settings-input" id="ll_s_threshold" type="number" min="0" max="1" step="0.05" />
             </div>
 
             <div class="ll-settings-section-title">
@@ -566,114 +561,136 @@ function createPanel() {
             </div>
             <div class="ll-settings-row">
                 <label>선택 엔진</label>
-                <select class="ll-settings-input" id="ll_s_selection_engine">
+                <select class="ll-settings-input" id="ll_s_selection_engine" style="width:unset;flex:1;text-align:left;">
                     <option value="hybrid">하이브리드 — BM25 + 벡터 (기본, 빠름)</option>
                     <option value="vector">벡터만 (의미 검색)</option>
                     <option value="bm25">BM25만 (임베딩 불필요)</option>
                     <option value="ai">AI 선택 (정밀, 느림)</option>
                 </select>
             </div>
-
-            <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:6px;">
-                <div style="font-size:11px;opacity:0.7;line-height:1.4;">
-                    <i class="fa-solid fa-bolt" style="color:#60a5fa;"></i> <b>벡터 설정.</b>
-                    임베딩 소스는 ST <b>Vector Storage</b> 설정을 따라갑니다. 소스/모델을 바꿨거나 엔트리를 많이 고쳤으면 <b>재색인</b>을 돌려주세요.
-                </div>
-                <div id="ll_s_vector_source" style="font-size:11px;opacity:0.8;"></div>
+            <!-- ST 이중주입 경고 — 엔진 무관하게 항상 노출 (managed 로어북에 ST 벡터가 얹힐 수 있음) -->
+            <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;">
                 <div id="ll_s_conflict_warn" style="font-size:11px;line-height:1.4;"></div>
-                <button class="menu_button" id="ll_s_reindex_btn" style="width:unset;white-space:nowrap;">
-                    <i class="fa-solid fa-database"></i> 벡터 재색인 (managed 전체)
-                </button>
-                <div id="ll_s_reindex_status" style="font-size:11px;opacity:0.7;"></div>
-            </div>
-            <div class="ll-settings-row">
-                <label>벡터 쿼리 범위</label>
-                <input class="ll-settings-input" id="ll_s_vector_scandepth" type="number" min="1" max="50" />
-                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">최근 N개 메시지 — 좁을수록 "지금 장면"에 집중 (BM25는 전체 창 사용)</span>
-            </div>
-            <div class="ll-settings-row">
-                <label>유사도 하한 (threshold)</label>
-                <input class="ll-settings-input" id="ll_s_vector_threshold" type="number" min="0" max="1" step="0.05" />
-                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">관련도 바닥선 — 관련 있는 게 적은 턴엔 적게 들어옴. 0=끔. 콘솔의 <code>vector N@값</code>으로 조절</span>
-            </div>
-            <div class="ll-settings-row">
-                <label>주입 상한 (maxK)</label>
-                <input class="ll-settings-input" id="ll_s_vector_maxk" type="number" min="1" max="50" />
-                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">최대 주입 개수 — 여기가 "다 들어오는" 걸 막는 주 손잡이</span>
-            </div>
-            <div class="ll-settings-row">
-                <label>상대 컷오프 비율</label>
-                <input class="ll-settings-input" id="ll_s_vector_ratio" type="number" min="0" max="1" step="0.05" />
-                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">0 = 끔(권장). 올리면 1등 대비 낮은 꼬리를 추가로 잘라냄</span>
-            </div>
-            <div class="ll-settings-row">
-                <label>RRF 가중치 <span style="font-size:10px;opacity:0.6;">[하이브리드]</span></label>
-                <input class="ll-settings-input" id="ll_s_hybrid_wv" type="number" min="0" max="5" step="0.1" style="max-width:70px;" />
-                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">벡터(의미)</span>
-                <input class="ll-settings-input" id="ll_s_hybrid_wb" type="number" min="0" max="5" step="0.1" style="max-width:70px;" />
-                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">BM25(단어)</span>
-            </div>
-            <div class="ll-settings-row">
-                <label>AI 선택 결과 (top K) <span style="font-size:10px;opacity:0.6;">[AI 엔진]</span></label>
-                <input class="ll-settings-input" id="ll_s_ai_select_k" type="number" min="1" max="30" />
-            </div>
-            <div class="ll-settings-row">
-                <label class="checkbox_label" style="flex:1;">
-                    <input id="ll_s_bm25_prefilter_enabled" type="checkbox" />
-                    <span>BM25 텍스트 매칭 prefilter <span style="font-size:10px;opacity:0.6;">(권장 ON — vector 의존성 0, ~50ms)</span></span>
-                </label>
-            </div>
-            <div class="ll-settings-row">
-                <label>BM25 prefilter Top-K</label>
-                <input class="ll-settings-input" id="ll_s_bm25_prefilter_k" type="number" min="5" max="500" />
-                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">후보 > K일 때만 작동</span>
-            </div>
-            <div class="ll-settings-row">
-                <label>채팅 스캔 깊이</label>
-                <input class="ll-settings-input" id="ll_s_scan_depth" type="number" min="1" max="50" />
-                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">최근 N msg</span>
-            </div>
-            <div class="ll-settings-row">
-                <label>AI 선택 timeout (초)</label>
-                <input class="ll-settings-input" id="ll_s_timeout_sec" type="number" min="5" max="600" />
-                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">기본 120 — 이 시간 넘으면 폴백</span>
-            </div>
-            <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:4px;opacity:0.6;">
-                <div style="font-size:11px;line-height:1.4;">
-                    <i class="fa-solid fa-circle-info" style="color:#fbbf24;"></i>
-                    <b>주입 위치/깊이는 entry별 옵션 + ST 프리셋의 World Info 슬롯에 따름.</b>
-                    LL은 entry를 ST WI 시스템에 강제 활성화만 함. 위치 변경하려면 ST 월드 인포 에디터에서 entry의 position/depth 직접 수정하거나 프리셋의 WI 슬롯 위치 조정.
-                </div>
-            </div>
-            <div class="ll-settings-row">
-                <label class="checkbox_label" style="flex:1;">
-                    <input id="ll_s_cache_enabled" type="checkbox" />
-                    <span>선택 결과 캐싱 (스와이프/리젠 비용 0)</span>
-                </label>
             </div>
 
-            <div class="ll-settings-section-title">
+            <!-- 고급 튜닝 (접이식, 엔진별 표시) -->
+            <div class="ll-settings-section-title ll-collapsible collapsed" data-toggle="ll_s_adv_tuning">
+                <i class="fa-solid fa-sliders"></i> 고급 튜닝
+                <span style="font-size:10px;opacity:0.5;font-weight:400;margin-left:auto;">엔진: <span id="ll_s_engine_label">hybrid</span></span>
+                <i class="fa-solid fa-chevron-down ll-collapse-chevron"></i>
+            </div>
+            <div class="ll-settings-group collapsed" id="ll_s_adv_tuning">
+                <!-- 스캔 범위 -->
+                <div class="ll-settings-row">
+                    <label>채팅 스캔 깊이</label>
+                    <input class="ll-settings-input" id="ll_s_scan_depth" type="number" min="1" max="50" />
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">최근 N msg — 전 엔진 공통</span>
+                </div>
+                <div class="ll-settings-row ll-eng-vec">
+                    <label>벡터 쿼리 범위</label>
+                    <input class="ll-settings-input" id="ll_s_vector_scandepth" type="number" min="1" max="50" />
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">최근 N개 — 좁을수록 "지금 장면" 집중 (채팅 깊이 이하)</span>
+                </div>
+
+                <!-- 주입량 (fast 엔진) -->
+                <div class="ll-settings-row ll-eng-fast">
+                    <label>주입 상한 (maxK)</label>
+                    <input class="ll-settings-input" id="ll_s_vector_maxk" type="number" min="1" max="50" />
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">최대 주입 개수 — "다 들어오는" 걸 막는 주 손잡이</span>
+                </div>
+                <div class="ll-settings-row ll-eng-fast">
+                    <label>상대 컷오프 비율</label>
+                    <input class="ll-settings-input" id="ll_s_vector_ratio" type="number" min="0" max="1" step="0.05" />
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">0 = 끔(권장). 올리면 1등 대비 낮은 꼬리 컷</span>
+                </div>
+                <div class="ll-settings-row ll-eng-vec">
+                    <label>유사도 하한 (threshold)</label>
+                    <input class="ll-settings-input" id="ll_s_vector_threshold" type="number" min="0" max="1" step="0.05" />
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">관련도 바닥선. 0=끔. 콘솔 <code>vector N@값</code>으로 조절</span>
+                </div>
+                <div class="ll-settings-row ll-eng-hybrid">
+                    <label>RRF 가중치</label>
+                    <input class="ll-settings-input" id="ll_s_hybrid_wv" type="number" min="0" max="5" step="0.1" style="max-width:70px;" />
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">벡터(의미)</span>
+                    <input class="ll-settings-input" id="ll_s_hybrid_wb" type="number" min="0" max="5" step="0.1" style="max-width:70px;" />
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">BM25(단어)</span>
+                </div>
+
+                <!-- AI 엔진 전용 -->
+                <div class="ll-settings-row ll-eng-ai">
+                    <label>AI 선택 결과 (top K)</label>
+                    <input class="ll-settings-input" id="ll_s_ai_select_k" type="number" min="1" max="30" />
+                </div>
+                <div class="ll-settings-row ll-eng-ai">
+                    <label>AI 선택 timeout (초)</label>
+                    <input class="ll-settings-input" id="ll_s_timeout_sec" type="number" min="5" max="600" />
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">기본 120 — 넘으면 폴백</span>
+                </div>
+                <div class="ll-settings-row ll-eng-ai">
+                    <label class="checkbox_label" style="flex:1;">
+                        <input id="ll_s_bm25_prefilter_enabled" type="checkbox" />
+                        <span>BM25 prefilter <span style="font-size:10px;opacity:0.6;">(권장 ON — vector 의존성 0)</span></span>
+                    </label>
+                </div>
+                <div class="ll-settings-row">
+                    <label>BM25 prefilter Top-K</label>
+                    <input class="ll-settings-input" id="ll_s_bm25_prefilter_k" type="number" min="5" max="500" />
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">BM25 후보 풀 크기</span>
+                </div>
+
+                <!-- 벡터 인덱스 (벡터 엔진) -->
+                <div class="ll-settings-row ll-eng-vec" style="flex-direction:column;align-items:stretch;gap:6px;">
+                    <div style="font-size:11px;opacity:0.7;line-height:1.4;">
+                        <i class="fa-solid fa-bolt" style="color:#60a5fa;"></i> <b>벡터 인덱스.</b>
+                        임베딩 소스는 ST <b>Vector Storage</b> 설정을 따라갑니다. 소스/모델을 바꿨거나 엔트리를 많이 고쳤으면 <b>재색인</b>.
+                    </div>
+                    <div id="ll_s_vector_source" style="font-size:11px;opacity:0.8;"></div>
+                    <button class="menu_button" id="ll_s_reindex_btn" style="width:unset;white-space:nowrap;">
+                        <i class="fa-solid fa-database"></i> 벡터 재색인 (managed 전체)
+                    </button>
+                    <div id="ll_s_reindex_status" style="font-size:11px;opacity:0.7;"></div>
+                </div>
+
+                <div class="ll-settings-row">
+                    <label class="checkbox_label" style="flex:1;">
+                        <input id="ll_s_cache_enabled" type="checkbox" />
+                        <span>선택 결과 캐싱 (스와이프/리젠 비용 0)</span>
+                    </label>
+                </div>
+                <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:4px;opacity:0.6;">
+                    <div style="font-size:11px;line-height:1.4;">
+                        <i class="fa-solid fa-circle-info" style="color:#fbbf24;"></i>
+                        <b>주입 위치/깊이는 entry별 옵션 + ST 프리셋의 World Info 슬롯을 따름.</b>
+                        LL은 entry를 ST WI에 강제 활성화만 함. 위치는 ST 월드 인포 에디터에서 entry의 position/depth로 수정.
+                    </div>
+                </div>
+            </div>
+
+            <div class="ll-settings-section-title ll-collapsible collapsed" data-toggle="ll_s_prompts">
                 <i class="fa-solid fa-pen-fancy"></i> 프롬프트 커스터마이즈
+                <i class="fa-solid fa-chevron-down ll-collapse-chevron" style="margin-left:auto;"></i>
             </div>
-            <div style="display:flex;flex-direction:column;gap:4px;">
-                <label style="font-size:12px;">세계관 생성 프롬프트</label>
-                <textarea class="ll-settings-textarea" id="ll_s_world_prompt" rows="3"></textarea>
-                <button class="ll-settings-reset-btn" data-reset="worldBuildPrompt"><i class="fa-solid fa-rotate-left"></i> 초기화</button>
-            </div>
-            <div style="display:flex;flex-direction:column;gap:4px;">
-                <label style="font-size:12px;">정리 프롬프트</label>
-                <textarea class="ll-settings-textarea" id="ll_s_organize_prompt" rows="3"></textarea>
-                <button class="ll-settings-reset-btn" data-reset="organizePrompt"><i class="fa-solid fa-rotate-left"></i> 초기화</button>
-            </div>
-            <div style="display:flex;flex-direction:column;gap:4px;">
-                <label style="font-size:12px;">압축 프롬프트</label>
-                <textarea class="ll-settings-textarea" id="ll_s_compress_prompt" rows="3"></textarea>
-                <button class="ll-settings-reset-btn" data-reset="compressPrompt"><i class="fa-solid fa-rotate-left"></i> 초기화</button>
-            </div>
-            <div style="display:flex;flex-direction:column;gap:4px;">
-                <label style="font-size:12px;">Summary 백필 프롬프트</label>
-                <textarea class="ll-settings-textarea" id="ll_s_summary_backfill_prompt" rows="3"></textarea>
-                <button class="ll-settings-reset-btn" data-reset="summaryBackfillPrompt"><i class="fa-solid fa-rotate-left"></i> 초기화</button>
+            <div class="ll-settings-group collapsed" id="ll_s_prompts">
+                <div style="display:flex;flex-direction:column;gap:4px;">
+                    <label style="font-size:12px;">세계관 생성 프롬프트</label>
+                    <textarea class="ll-settings-textarea" id="ll_s_world_prompt" rows="3"></textarea>
+                    <button class="ll-settings-reset-btn" data-reset="worldBuildPrompt"><i class="fa-solid fa-rotate-left"></i> 초기화</button>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:4px;">
+                    <label style="font-size:12px;">정리 프롬프트</label>
+                    <textarea class="ll-settings-textarea" id="ll_s_organize_prompt" rows="3"></textarea>
+                    <button class="ll-settings-reset-btn" data-reset="organizePrompt"><i class="fa-solid fa-rotate-left"></i> 초기화</button>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:4px;">
+                    <label style="font-size:12px;">압축 프롬프트</label>
+                    <textarea class="ll-settings-textarea" id="ll_s_compress_prompt" rows="3"></textarea>
+                    <button class="ll-settings-reset-btn" data-reset="compressPrompt"><i class="fa-solid fa-rotate-left"></i> 초기화</button>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:4px;">
+                    <label style="font-size:12px;">Summary 백필 프롬프트</label>
+                    <textarea class="ll-settings-textarea" id="ll_s_summary_backfill_prompt" rows="3"></textarea>
+                    <button class="ll-settings-reset-btn" data-reset="summaryBackfillPrompt"><i class="fa-solid fa-rotate-left"></i> 초기화</button>
+                </div>
             </div>
         </div>
 
@@ -708,6 +725,89 @@ function createPanel() {
 
     // Bind panel events
     bindPanelEvents(panel);
+}
+
+// ============================================================
+// New Entry Modal (수동 엔트리 생성)
+// ============================================================
+
+function openNewEntryModal() {
+    const s = getSettings();
+    if (!s.targetLorebook) {
+        toastr.warning('먼저 설정에서 Target 로어북을 선택해주세요.', 'LivingLorebook');
+        return;
+    }
+
+    // 카테고리 옵션 — arc(줄거리)는 organize/arc 자동 생성 전용이라 수동 목록에서 제외
+    const catOptions = Object.entries(CATEGORIES)
+        .filter(([k]) => k !== 'arc')
+        .map(([k, c]) => `<option value="${k}"${k === 'fact' ? ' selected' : ''}>${c.iconChar} ${c.label}</option>`)
+        .join('');
+
+    const modal = document.createElement('dialog');
+    modal.className = 'll-suggest-modal ll-newentry-modal';
+    modal.innerHTML = `
+        <div class="ll-suggest-header">
+            <div class="ll-suggest-title"><i class="fa-solid fa-plus"></i> 새 엔트리</div>
+            <button class="ll-suggest-close" title="닫기"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="ll-suggest-body">
+            <div class="ll-suggest-section">
+                <label class="ll-suggest-label">카테고리</label>
+                <select class="ll-suggest-item-cat" id="ll_new_cat" style="width:100%;">${catOptions}</select>
+            </div>
+            <div class="ll-suggest-section">
+                <label class="ll-suggest-label">제목</label>
+                <input type="text" class="ll-suggest-item-title" id="ll_new_title" style="width:100%;" placeholder="제목" />
+            </div>
+            <div class="ll-suggest-section">
+                <label class="ll-suggest-label">내용</label>
+                <textarea class="ll-suggest-req" id="ll_new_content" rows="7" placeholder="엔트리 본문을 자유롭게 입력하세요..."></textarea>
+            </div>
+            <div style="font-size:11px;opacity:0.6;line-height:1.4;">
+                Target 로어북 <b>${escapeHtml(s.targetLorebook)}</b> 에 추가됩니다.
+                managed mode면 키워드 없이 저장되고 LL 선택 엔진이 주입을 통제합니다.
+            </div>
+        </div>
+        <div class="ll-suggest-footer">
+            <button class="ll-suggest-btn ll-suggest-btn-cancel" id="ll_new_cancel">취소</button>
+            <button class="ll-suggest-btn ll-suggest-btn-primary" id="ll_new_create"><i class="fa-solid fa-check"></i> 생성</button>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    modal.showModal();
+
+    const close = () => { modal.close(); modal.remove(); };
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    modal.querySelector('.ll-suggest-close').addEventListener('click', close);
+    modal.querySelector('#ll_new_cancel').addEventListener('click', close);
+
+    const createBtn = modal.querySelector('#ll_new_create');
+    createBtn.addEventListener('click', async () => {
+        const title = modal.querySelector('#ll_new_title').value.trim();
+        const content = modal.querySelector('#ll_new_content').value;
+        const category = modal.querySelector('#ll_new_cat').value;
+        if (!title) {
+            toastr.warning('제목을 입력해주세요.', 'LivingLorebook');
+            return;
+        }
+        createBtn.disabled = true;
+        createBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 생성 중...';
+        try {
+            const res = await createManualEntry({ title, content, category });
+            clearSelectionCache();   // 새 후보 추가 → 선택 캐시 무효화
+            close();
+            await refreshPanel();
+            toastr.success(`"${res.title}" 엔트리 추가됨`, 'LivingLorebook');
+        } catch (err) {
+            console.error(`${LOG_PREFIX} manual entry create failed:`, err);
+            toastr.error(err.message || '엔트리 생성 실패', 'LivingLorebook');
+            createBtn.disabled = false;
+            createBtn.innerHTML = '<i class="fa-solid fa-check"></i> 생성';
+        }
+    });
+
+    setTimeout(() => modal.querySelector('#ll_new_title')?.focus(), 50);
 }
 
 // ============================================================
@@ -937,6 +1037,9 @@ function bindPanelEvents(panel) {
         btn.addEventListener('click', () => handleToolbarAction(btn.dataset.action));
     });
 
+    // 새 엔트리 (수동 생성)
+    panel.querySelector('#ll_add_entry_btn')?.addEventListener('click', openNewEntryModal);
+
     // Filter chips
     panel.querySelectorAll('.ll-filter-chip[data-filter]').forEach(chip => {
         chip.addEventListener('click', () => {
@@ -969,9 +1072,47 @@ function bindSettingsInputs(panel) {
         });
     };
 
+    // textarea를 내용 높이에 맞춰 자동 확장 (최대 60vh, 넘으면 스크롤)
+    // 숨겨진(접힌) 상태에선 scrollHeight가 0이라 스킵 → 펼칠 때 다시 계산
+    function autoGrowTextarea(el) {
+        if (!el || el.offsetParent === null) return;
+        el.style.height = 'auto';
+        const cap = Math.floor(window.innerHeight * 0.6);
+        const needed = el.scrollHeight + 2;
+        el.style.height = Math.min(needed, cap) + 'px';
+        el.style.overflowY = needed > cap ? 'auto' : 'hidden';
+    }
+
+    // 접이식 섹션 (고급 튜닝 / 프롬프트) — 헤더 클릭 시 본문 토글
+    panel.querySelectorAll('.ll-settings-section-title.ll-collapsible').forEach(title => {
+        title.addEventListener('click', () => {
+            const content = panel.querySelector('#' + title.dataset.toggle);
+            title.classList.toggle('collapsed');
+            content?.classList.toggle('collapsed');
+            // 펼친 직후: 숨어있던 textarea 높이를 내용에 맞춰 다시 계산
+            if (content && !content.classList.contains('collapsed')) {
+                content.querySelectorAll('textarea').forEach(autoGrowTextarea);
+            }
+        });
+    });
+
+    // 선택 엔진에 따라 고급 튜닝 파라미터 표시/숨김
+    function updateEngineVisibility(engine) {
+        const show = {
+            '.ll-eng-fast':   engine !== 'ai',                          // maxK / 컷오프
+            '.ll-eng-vec':    engine === 'hybrid' || engine === 'vector', // 벡터 범위/하한/재색인
+            '.ll-eng-hybrid': engine === 'hybrid',                      // RRF 가중치
+            '.ll-eng-ai':     engine === 'ai',                          // AI K / timeout / prefilter 토글
+        };
+        for (const [sel, visible] of Object.entries(show)) {
+            panel.querySelectorAll(sel).forEach(el => { el.style.display = visible ? '' : 'none'; });
+        }
+        const lbl = panel.querySelector('#ll_s_engine_label');
+        if (lbl) lbl.textContent = engine;
+    }
+
     bind('#ll_s_position', 'entryPosition');
     bind('#ll_s_hide_depth', 'hideAfterOrganizeDepth');
-    bind('#ll_s_topk', 'vectorTopK');
 
     // Checkbox bind (hideAfterOrganize)
     const hideAfterEl = panel.querySelector('#ll_s_hide_after');
@@ -993,7 +1134,6 @@ function bindSettingsInputs(panel) {
         });
     }
 
-    bind('#ll_s_threshold', 'vectorThreshold', v => parseFloat(v) || 0.3);
     bind('#ll_s_tier2', 'tier2TargetRatio');
     bind('#ll_s_tier3', 'tier3TargetRatio');
 
@@ -1002,9 +1142,11 @@ function bindSettingsInputs(panel) {
         const el = panel.querySelector(id);
         if (!el) return;
         el.value = settings[key];
+        autoGrowTextarea(el);   // 초기 높이 (펼쳐져 있으면 즉시, 접혀있으면 펼칠 때 재계산)
         el.addEventListener('input', () => {
             settings[key] = el.value;
             saveSettings();
+            autoGrowTextarea(el);
         });
     };
 
@@ -1103,10 +1245,12 @@ function bindSettingsInputs(panel) {
     const engineEl = panel.querySelector('#ll_s_selection_engine');
     if (engineEl) {
         engineEl.value = settings.selectionEngine || 'hybrid';
+        updateEngineVisibility(engineEl.value);   // 초기 표시 상태
         engineEl.addEventListener('change', () => {
             settings.selectionEngine = engineEl.value;
             saveSettings();
             clearSelectionCache();
+            updateEngineVisibility(engineEl.value);
             toastr.info(`선택 엔진: ${ENGINE_LABELS[engineEl.value] || engineEl.value}`);
             // 벡터를 쓰는 엔진 + 마스터 ON + 아직 색인 없음이면 자동 재색인 1회.
             // (이미 색인돼 있으면 사용자가 명시적으로 누를 때만 — 큰 로어북에서 임베딩 비용이 든다)
@@ -1365,12 +1509,14 @@ function switchView(view) {
     const settingsView = document.getElementById('ll_settings_view');
     const filterBar = document.querySelector('.ll-filter-bar');
     const toolbar = document.querySelector('.ll-toolbar');
+    const addBar = document.getElementById('ll_timeline_actions');
     const settingsBtn = document.querySelector('.ll-btn-settings i');
 
     if (view === 'settings') {
         timeline.style.display = 'none';
         filterBar.style.display = 'none';
         toolbar.style.display = 'none';
+        if (addBar) addBar.style.display = 'none';
         settingsView.classList.add('active');
         settingsBtn.className = 'fa-solid fa-arrow-left';
         // 매 settings view 진입 시 카드 리스트 + dropdown 강제 재렌더 (stale 방지)
@@ -1384,6 +1530,7 @@ function switchView(view) {
         timeline.style.display = '';
         filterBar.style.display = '';
         toolbar.style.display = '';
+        if (addBar) addBar.style.display = '';
         settingsView.classList.remove('active');
         settingsBtn.className = 'fa-solid fa-gear';
         renderTimeline();

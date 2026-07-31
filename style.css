@@ -414,6 +414,35 @@
     color: #63b3ed;
 }
 
+/* ── 수동 엔트리 추가 바 ── */
+.ll-timeline-actions {
+    display: flex;
+    padding: 8px 20px 0;
+    flex-shrink: 0;
+}
+
+.ll-add-entry-btn {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border-radius: 8px;
+    border: 1px dashed var(--SmartThemeBorderColor, rgba(255,255,255,0.2));
+    background: transparent;
+    color: var(--SmartThemeBodyColor, #bbb);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.ll-add-entry-btn:hover {
+    background: rgba(99, 179, 237, 0.1);
+    border-color: rgba(99, 179, 237, 0.5);
+    color: #63b3ed;
+}
+
 /* ── Timeline Content ── */
 .ll-timeline {
     flex: 1;
@@ -967,6 +996,29 @@
     font-size: 11px;
 }
 
+/* 접이식 섹션 헤더 */
+.ll-settings-section-title.ll-collapsible {
+    cursor: pointer;
+    user-select: none;
+}
+.ll-collapse-chevron {
+    transition: transform 0.15s ease;
+    opacity: 0.6;
+}
+.ll-settings-section-title.ll-collapsible.collapsed .ll-collapse-chevron {
+    transform: rotate(-90deg);
+}
+
+/* 접이식 본문 그룹 */
+.ll-settings-group {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.ll-settings-group.collapsed {
+    display: none;
+}
+
 .ll-settings-row {
     display: flex;
     align-items: center;
@@ -1001,6 +1053,8 @@
     font-family: inherit;
     font-size: 12px;
     line-height: 1.5;
+    min-height: 4.5em;   /* auto-grow 하한 — 빈/짧은 프롬프트도 편집 가능한 크기 유지 */
+    box-sizing: border-box;
 }
 
 .ll-settings-unit {
@@ -1185,9 +1239,8 @@ dialog.ll-suggest-modal::backdrop {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    max-height: 400px;
-    overflow-y: auto;
     padding: 4px 2px;
+    /* 스크롤은 .ll-suggest-body 한 곳에서만 — 목록은 자연스럽게 늘어남 (이중 스크롤 방지) */
 }
 
 .ll-suggest-empty {
@@ -1323,13 +1376,6 @@ dialog.ll-suggest-modal::backdrop {
 
 .ll-suggest-btn-cancel {
     opacity: 0.7;
-}
-
-/* 모바일 대응 */
-@media (max-width: 767px) {
-    .ll-suggest-list {
-        max-height: none;
-    }
 }
 
 /* ============================================================

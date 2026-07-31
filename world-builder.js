@@ -95,6 +95,59 @@ export async function generateWorld(description) {
 }
 
 /**
+ * 수동 엔트리 생성 — 유저가 패널에서 카테고리/제목/내용을 직접 입력해 target 로어북에 1개 추가.
+ * AI 호출 없음. createEntry가 managed mode·position·order·metadata를 알아서 처리.
+ * @param {{title: string, content: string, category: string}} fields
+ * @returns {Promise<{uid: string|number, title: string, category: string}>}
+ */
+export async function createManualEntry({ title, content, category }) {
+    const settings = getSettings();
+
+    if (!settings.targetLorebook) {
+        throw new Error('대상(target) 로어북을 먼저 선택해주세요.');
+    }
+
+    const cleanTitle = (title || '').trim();
+    if (!cleanTitle) {
+        throw new Error('제목을 입력해주세요.');
+    }
+
+    const data = await loadTargetLorebook();
+    if (!data) {
+        throw new Error('로어북을 로드할 수 없습니다.');
+    }
+
+    const entry = await createEntry(settings.targetLorebook, data, {
+        title: cleanTitle,
+        content: content || '',
+        keywords: [cleanTitle],
+        category: category || 'fact',
+    });
+    if (!entry) {
+        throw new Error('엔트리 생성에 실패했습니다.');
+    }
+
+    await saveLorebook(settings.targetLorebook, data);
+    refreshEditor();
+
+    // 벡터 색인에 삽입 (실패해도 치명적 아님 — BM25로는 바로 잡히고, 벡터는 재색인으로 복구 가능)
+    try {
+        const collectionId = getCollectionId(settings.targetLorebook);
+        await insertEntries(collectionId, [{
+            uid: String(entry.uid),
+            title: cleanTitle,
+            content: content || '',
+            comment: cleanTitle,
+        }]);
+    } catch (err) {
+        console.warn(`${LOG_PREFIX} Manual entry vector insertion failed (non-critical):`, err);
+    }
+
+    console.log(`${LOG_PREFIX} Created manual entry: ${cleanTitle} (${category || 'fact'})`);
+    return { uid: entry.uid, title: cleanTitle, category: category || 'fact' };
+}
+
+/**
  * 세계관 엔트리 제안 — 캐릭터 카드 + 기존 로어북 분석 후 필요한 엔트리 목록만 제안
  * @param {string} characterContext - 캐릭터 카드 + 페르소나
  * @param {string} userRequirements - 유저가 직접 넣고싶은 설정

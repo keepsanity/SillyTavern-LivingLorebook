@@ -74,13 +74,6 @@ export const DEFAULT_SETTINGS = {
     // 최근 N개 메시지는 하이드 제외 (0 = 전부 하이드)
     hideAfterOrganizeDepth: 0,
 
-    // 벡터 검색
-    vectorTopK: 10,
-    vectorThreshold: 0.3,
-    injectionPosition: 1, // 1 = in-chat
-    injectionDepth: 4,
-    injectionRole: 0, // 0 = system
-
     // Summary 기반 AI 선택 (Phase 2)
     summarySelectionEnabled: false,    // 마스터 토글 (LL이 주입 통제 — 켜면 ST 네이티브 키워드/벡터 off)
     // 'hybrid' = BM25 + 벡터 RRF 융합 (기본, AI 호출 0)
