@@ -765,31 +765,49 @@ async function _selectFast(candidates, queries, settings, lorebooks, engine) {
 }
 
 /**
+ * 로어북 하나를 벡터 재색인 + 이 로어북이 어떤 임베더로 색인됐는지 per-lorebook 기록.
+ * per-lorebook 시그니처가 있어야 "채팅마다 로어북이 달라도 이미 색인된 건 다시 안 함"이 가능.
+ * @returns {Promise<number>} 실제 색인된 엔트리 수
+ */
+async function reindexOneLorebook(lbName, signature) {
+    const data = await loadAnyLorebook(lbName);
+    if (!data || !data.entries) return 0;
+    const entries = [];
+    for (const [uid, entry] of Object.entries(data.entries)) {
+        if (entry.disable || entry.constant) continue; // 후보 풀과 동일 기준
+        entries.push({ uid: String(uid), content: entry.content || '', title: entry.comment || '' });
+    }
+    if (entries.length === 0) return 0;
+
+    await reindexCollection(getCollectionId(lbName), entries);
+
+    const settings = getSettings();
+    // shared-ref 회피: DEFAULT에 안 넣고 여기서 own 프로퍼티로 lazy 생성
+    if (!settings.vectorIndexByLorebook || typeof settings.vectorIndexByLorebook !== 'object') {
+        settings.vectorIndexByLorebook = {};
+    }
+    settings.vectorIndexByLorebook[lbName] = signature;
+
+    console.log(`${LOG_PREFIX} Reindexed ${entries.length} entries in ${getCollectionId(lbName)}`);
+    return entries.length;
+}
+
+/**
  * managed 로어북 전체 재색인 — 벡터 컬렉션 purge 후 현재 엔트리로 재삽입.
  * 해시 스킴 변경 / 내용 수정 / 임베딩 소스 변경으로 stale해진 임베딩을 갱신. UI 버튼에서 호출.
  * @returns {Promise<{lorebooks: number, entries: number, signature: string}>}
  */
 export async function reindexManagedLorebooks() {
     const lorebooks = getEffectiveSelectionLorebooks().filter(name => isManagedMode(name));
+    const signature = getVectorSourceSignature();
     let totalEntries = 0;
     for (const lbName of lorebooks) {
-        const data = await loadAnyLorebook(lbName);
-        if (!data || !data.entries) continue;
-        const entries = [];
-        for (const [uid, entry] of Object.entries(data.entries)) {
-            if (entry.disable || entry.constant) continue; // 후보 풀과 동일 기준
-            entries.push({ uid: String(uid), content: entry.content || '', title: entry.comment || '' });
-        }
-        if (entries.length === 0) continue;
-        await reindexCollection(getCollectionId(lbName), entries);
-        totalEntries += entries.length;
-        console.log(`${LOG_PREFIX} Reindexed ${entries.length} entries in ${getCollectionId(lbName)}`);
+        totalEntries += await reindexOneLorebook(lbName, signature);
     }
 
     // 이 인덱스가 어떤 임베딩 소스로 만들어졌는지 기록 → 이후 소스가 바뀌면 감지 가능.
     // 색인된 게 하나도 없으면(managed 로어북 없음 등) 기록하지 않는다 —
     // 안 그러면 "인덱스 일치"가 떠서 정상인 것처럼 보인다.
-    const signature = getVectorSourceSignature();
     if (totalEntries > 0) {
         const settings = getSettings();
         settings.vectorIndexSignature = signature;
@@ -800,4 +818,40 @@ export async function reindexManagedLorebooks() {
     }
 
     return { lorebooks: lorebooks.length, entries: totalEntries, signature };
+}
+
+/**
+ * 채팅 열 때 호출 — 지금 managed 로어북 중 "현재 임베더로 아직 색인 안 된" 것만 조용히 재색인.
+ * 이미 같은 임베더로 색인된 로어북은 건드리지 않음(비용 0).
+ * 벡터를 쓰는 엔진(hybrid) + 마스터 ON일 때만 동작.
+ * @returns {Promise<{reindexed: string[], entries: number} | null>} null = 할 일 없었음
+ */
+export async function autoReindexStaleLorebooks() {
+    const settings = getSettings();
+    if (!settings.summarySelectionEnabled) return null;
+    if ((settings.selectionEngine || 'hybrid') !== 'hybrid') return null; // 벡터 쓰는 엔진만
+
+    const signature = getVectorSourceSignature();
+    const map = (settings.vectorIndexByLorebook && typeof settings.vectorIndexByLorebook === 'object')
+        ? settings.vectorIndexByLorebook : {};
+
+    const managed = getEffectiveSelectionLorebooks().filter(name => isManagedMode(name));
+    const stale = managed.filter(name => map[name] !== signature);
+    if (stale.length === 0) return null;
+
+    let totalEntries = 0;
+    const reindexed = [];
+    for (const lbName of stale) {
+        const n = await reindexOneLorebook(lbName, signature);
+        if (n > 0) { totalEntries += n; reindexed.push(lbName); }
+    }
+    if (reindexed.length === 0) return null;
+
+    // 글로벌 상태창 표시도 최신으로 (상태 "일치" 판정용)
+    settings.vectorIndexSignature = signature;
+    settings.vectorIndexCount = totalEntries;
+    settings.vectorIndexAt = Date.now();
+    saveSettings();
+    _sigWarned = null;
+    return { reindexed, entries: totalEntries };
 }

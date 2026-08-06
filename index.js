@@ -13,7 +13,7 @@ import { initStore, getSettings, saveSettings, loadTargetLorebook, loadAnyLorebo
 import { initLLMService } from './llm-service.js';
 import { generateWorld, reorganizeExisting, suggestWorldEntries, generateFromSuggestions, createManualEntry } from './world-builder.js';
 import { organize, compress, backfillSummaries, generateStoryArc } from './memory-manager.js';
-import { selectEntries, clearSelectionCache, getLastInjectionStats, reindexManagedLorebooks } from './summary-retrieval.js';
+import { selectEntries, clearSelectionCache, getLastInjectionStats, reindexManagedLorebooks, autoReindexStaleLorebooks } from './summary-retrieval.js';
 import { getVectorSourceInfo } from './vector-service.js';
 
 // ============================================================
@@ -1935,6 +1935,30 @@ async function refreshPanel() {
     await updateStatusBar();
 }
 
+// 채팅 열 때 이 채팅의 managed 로어북이 아직 색인 안 됐으면 조용히 자동 재색인.
+// 이미 같은 임베더로 색인된 로어북은 스킵(비용 0). CHAT_CHANGED가 연속 발화해도 1개만.
+let _autoReindexInflight = false;
+async function maybeAutoReindex() {
+    if (_autoReindexInflight) return;
+    _autoReindexInflight = true;
+    try {
+        const res = await autoReindexStaleLorebooks();
+        if (res) {
+            clearSelectionCache();
+            toastr.info(
+                `벡터 자동 재색인: ${res.reindexed.length}개 로어북 · ${res.entries}개 엔트리`,
+                'LivingLorebook', { timeOut: 3500 },
+            );
+            const panel = document.querySelector('.ll-panel');
+            if (panel?.classList.contains('open')) refreshPanel();
+        }
+    } catch (err) {
+        console.warn(`${LOG_PREFIX} auto-reindex failed (non-critical):`, err);
+    } finally {
+        _autoReindexInflight = false;
+    }
+}
+
 /**
  * 주입 칩만 즉시 갱신 — selectEntries 끝날 때마다 호출 (값은 메모리에 이미 있음).
  */
@@ -2779,6 +2803,9 @@ function registerEventListeners() {
             populateAddLorebookDropdown(panel);
             populateTargetLorebookDropdown(panel);
         }
+
+        // 이 채팅의 로어북이 아직 색인 안 됐으면 조용히 자동 재색인 (이미 된 건 스킵)
+        maybeAutoReindex();
     });
 
     // Generation hook — WI 처리 전에 우리 주입 슬롯 채움 (캐시 적중이면 즉시)
