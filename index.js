@@ -6,13 +6,17 @@
  */
 
 import { event_types } from '../../../events.js';
-import { saveSettingsDebounced, characters, this_chid, chat_metadata, saveMetadata, setExtensionPrompt } from '../../../../script.js';
+import { characters, this_chid, chat_metadata, setExtensionPrompt } from '../../../../script.js';
 import { world_names, createNewWorldInfo } from '../../../world-info.js';
-import { power_user } from '../../../power-user.js';
-import { initStore, getSettings, saveSettings, loadTargetLorebook, loadAnyLorebook, calculateTierStats, calculateSelectionStorage, getMetadata, DEFAULT_SETTINGS, updateEntryFields, enableEntry, deactivateEntry, deleteEntry, setEntryPinned, saveLorebook, refreshEditor, migrateToManagedMode, getEffectiveSelectionLorebooks, isManagedMode } from './lore-store.js';
+import { initStore, getSettings, saveSettings, loadTargetLorebook, loadAnyLorebook, calculateSelectionStorage, getMetadata, DEFAULT_SETTINGS, migrateToManagedMode, getEffectiveSelectionLorebooks, isManagedMode } from './lore-store.js';
 import { initLLMService } from './llm-service.js';
-import { generateWorld, reorganizeExisting, suggestWorldEntries, generateFromSuggestions, createManualEntry } from './world-builder.js';
+import { generateWorld, reorganizeExisting } from './world-builder.js';
 import { organize, compress, backfillSummaries, generateStoryArc } from './memory-manager.js';
+import { CATEGORIES, escapeHtml, escapeAttr, registerRefreshPanel, getCharacterContext } from './ui-shared.js';
+import { openNewEntryModal } from './ui-newentry.js';
+import { createSuggestModal, openSuggestModal } from './ui-suggest.js';
+import { openInlineEditor, handleEntryHideToggle, handleEntryLiveToggle, handleEntryPinToggle, handleEntryDelete } from './ui-entry.js';
+import { LL_SELECTION_KEY, setChatLorebook, getChatSelectionLorebooks, setChatSelectionLorebooks, restoreChatMetadata } from './chat-meta.js';
 import { selectEntries, clearSelectionCache, getLastInjectionStats, reindexManagedLorebooks, autoReindexStaleLorebooks } from './summary-retrieval.js';
 import { getVectorSourceInfo } from './vector-service.js';
 
@@ -24,18 +28,6 @@ const EXTENSION_NAME = 'SillyTavern-LivingLorebook';
 const LOG_PREFIX = '[LivingLorebook]';
 const TRIGGER_POS_KEY = 'll_trigger_pos';
 
-// Category config
-const CATEGORIES = {
-    arc:           { icon: 'fa-solid fa-book-bookmark',  label: '줄거리',   iconChar: '📖' },
-    character:     { icon: 'fa-solid fa-user',           label: '캐릭터',   iconChar: '🧑' },
-    relationship:  { icon: 'fa-solid fa-heart',          label: '관계',     iconChar: '💕' },
-    location:      { icon: 'fa-solid fa-location-dot',   label: '장소',     iconChar: '📍' },
-    event:         { icon: 'fa-solid fa-bolt',           label: '사건',     iconChar: '⚡' },
-    routine:       { icon: 'fa-solid fa-clock',          label: '일상',     iconChar: '🔄' },
-    item:          { icon: 'fa-solid fa-gem',            label: '아이템',   iconChar: '💎' },
-    fact:          { icon: 'fa-solid fa-circle-info',    label: '설정',     iconChar: 'ℹ️' },
-};
-
 // ============================================================
 // State
 // ============================================================
@@ -45,64 +37,11 @@ let settings = null;
 let isProcessing = false;
 let currentView = 'timeline'; // 'timeline' | 'settings'
 let activeFilter = 'all';
+// bindSettingsInputs 내부 클로저(refreshVectorSourceStatus)를 밖에서도 부르기 위한 참조
+// — 채팅 바뀌면 벡터 상태줄도 현재 로어북 기준으로 다시 그려야 함
+let refreshVectorStatusRef = null;
 
-// ST 내장 chat lorebook과 동일 패턴 — 객체 대신 string 단일 키 (객체는 chat_metadata에서 깨질 가능성)
-const LL_TARGET_KEY = 'll_target_lorebook';
-const LL_SELECTION_KEY = 'll_selection_lorebooks';
-const METADATA_KEY = 'living_lorebook'; // (deprecated, 1회 마이그레이션용)
-
-function getChatLorebook() {
-    return chat_metadata?.[LL_TARGET_KEY] || '';
-}
-
-function setChatLorebook(lorebookName) {
-    if (!chat_metadata) {
-        console.warn(`${LOG_PREFIX} chat_metadata unavailable in setChatLorebook`);
-        return;
-    }
-    if (lorebookName) {
-        chat_metadata[LL_TARGET_KEY] = lorebookName;
-    } else {
-        delete chat_metadata[LL_TARGET_KEY];
-    }
-    settings.targetLorebook = lorebookName || '';
-    saveSettings();
-    saveMetadata();
-    console.log(`${LOG_PREFIX} chat_metadata.${LL_TARGET_KEY} = "${lorebookName}"`);
-}
-
-function getChatSelectionLorebooks() {
-    const raw = chat_metadata?.[LL_SELECTION_KEY];
-    // string으로 저장돼있음 (JSON.stringify 결과) — parse 시도
-    if (typeof raw === 'string' && raw.length > 0) {
-        try {
-            const parsed = JSON.parse(raw);
-            return Array.isArray(parsed) ? parsed : [];
-        } catch { return []; }
-    }
-    // 옛 array 형식 (마이그레이션 전) 호환
-    if (Array.isArray(raw)) return raw;
-    return [];
-}
-
-function setChatSelectionLorebooks(arr) {
-    if (!chat_metadata) {
-        console.warn(`${LOG_PREFIX} chat_metadata unavailable in setChatSelectionLorebooks`);
-        return;
-    }
-    const cleaned = Array.isArray(arr) ? arr.filter(n => typeof n === 'string' && n.length > 0) : [];
-    if (cleaned.length > 0) {
-        // ST가 chat_metadata에 array 안 보존하는 듯 — JSON.stringify로 string 저장
-        chat_metadata[LL_SELECTION_KEY] = JSON.stringify(cleaned);
-    } else {
-        delete chat_metadata[LL_SELECTION_KEY];
-    }
-    settings.selectionLorebooks = cleaned;
-    saveSettings();
-    saveMetadata();
-    clearSelectionCache();
-    console.log(`${LOG_PREFIX} chat_metadata.${LL_SELECTION_KEY} = ${JSON.stringify(cleaned)}`);
-}
+// 채팅 메타데이터(target/선택 로어북) get/set + restore는 chat-meta.js로 분리됨.
 
 // ============================================================
 // Init
@@ -133,9 +72,15 @@ async function init() {
     // Add wand menu button (채팅방 확장 버튼)
     addWandMenuButton();
 
+    // 분리된 UI 모듈(모달 등)이 순환 import 없이 패널을 새로고침할 수 있게 refreshPanel 등록
+    registerRefreshPanel(refreshPanel);
+
     // Register events & commands
     registerEventListeners();
     registerSlashCommands();
+
+    // 첫 채팅/ST 재시작 시엔 CHAT_CHANGED가 안 튈 수 있음 → 여기서도 한 번 자동 재색인 점검
+    maybeAutoReindex();
 
     console.log(`${LOG_PREFIX} Initialized`);
 }
@@ -148,31 +93,6 @@ async function init() {
  * - chat_metadata에 LL 데이터 있음 → 그 값으로 settings 복원
  * - 없음 → settings를 명시적으로 비움 (다른 채팅의 selection이 leak되지 않게)
  */
-function restoreChatMetadata() {
-    if (!chat_metadata) {
-        settings.targetLorebook = '';
-        settings.selectionLorebooks = [];
-        return;
-    }
-
-    // 옛 객체 키 1회 마이그레이션 (있으면 새 단일 키로 옮김)
-    const legacy = chat_metadata[METADATA_KEY];
-    if (legacy && typeof legacy === 'object') {
-        if (typeof legacy.targetLorebook === 'string' && !chat_metadata[LL_TARGET_KEY]) {
-            chat_metadata[LL_TARGET_KEY] = legacy.targetLorebook;
-        }
-        if (Array.isArray(legacy.selectionLorebooks) && !chat_metadata[LL_SELECTION_KEY]) {
-            chat_metadata[LL_SELECTION_KEY] = JSON.stringify(legacy.selectionLorebooks);
-        }
-        delete chat_metadata[METADATA_KEY];
-        try { saveMetadata(); } catch { /* noop */ }
-        console.log(`${LOG_PREFIX} Migrated legacy chat_metadata.${METADATA_KEY} → single keys`);
-    }
-
-    settings.targetLorebook = chat_metadata[LL_TARGET_KEY] || '';
-    settings.selectionLorebooks = getChatSelectionLorebooks();
-}
-
 // ============================================================
 // Sidebar Settings (minimal)
 // ============================================================
@@ -250,24 +170,6 @@ function populateLorebookDropdown() {
 /**
  * 현재 캐릭터 카드 + 페르소나 정보 수집
  */
-function getCharacterContext() {
-    const parts = [];
-
-    if (this_chid !== undefined && characters[this_chid]) {
-        const char = characters[this_chid];
-        if (char.description) parts.push(`[Character Description]\n${char.description}`);
-        if (char.personality) parts.push(`[Personality]\n${char.personality}`);
-        if (char.scenario) parts.push(`[Scenario]\n${char.scenario}`);
-        if (char.first_mes) parts.push(`[First Message]\n${char.first_mes}`);
-    }
-
-    if (power_user.persona_description) {
-        parts.push(`[User Persona]\n${power_user.persona_description}`);
-    }
-
-    return parts.join('\n\n');
-}
-
 // ============================================================
 // Floating Trigger Button
 // ============================================================
@@ -722,297 +624,7 @@ function createPanel() {
     bindPanelEvents(panel);
 }
 
-// ============================================================
-// New Entry Modal (수동 엔트리 생성)
-// ============================================================
-
-function openNewEntryModal() {
-    const s = getSettings();
-    if (!s.targetLorebook) {
-        toastr.warning('먼저 설정에서 Target 로어북을 선택해주세요.', 'LivingLorebook');
-        return;
-    }
-
-    // 카테고리 옵션 — arc(줄거리)는 organize/arc 자동 생성 전용이라 수동 목록에서 제외
-    const catOptions = Object.entries(CATEGORIES)
-        .filter(([k]) => k !== 'arc')
-        .map(([k, c]) => `<option value="${k}"${k === 'fact' ? ' selected' : ''}>${c.iconChar} ${c.label}</option>`)
-        .join('');
-
-    const modal = document.createElement('dialog');
-    modal.className = 'll-suggest-modal ll-newentry-modal';
-    modal.innerHTML = `
-        <div class="ll-suggest-header">
-            <div class="ll-suggest-title"><i class="fa-solid fa-plus"></i> 새 엔트리</div>
-            <button class="ll-suggest-close" title="닫기"><i class="fa-solid fa-xmark"></i></button>
-        </div>
-        <div class="ll-suggest-body">
-            <div class="ll-suggest-section">
-                <label class="ll-suggest-label">카테고리</label>
-                <select class="ll-suggest-item-cat" id="ll_new_cat" style="width:100%;">${catOptions}</select>
-            </div>
-            <div class="ll-suggest-section">
-                <label class="ll-suggest-label">제목</label>
-                <input type="text" class="ll-suggest-item-title" id="ll_new_title" style="width:100%;" placeholder="제목" />
-            </div>
-            <div class="ll-suggest-section">
-                <label class="ll-suggest-label">내용</label>
-                <textarea class="ll-suggest-req" id="ll_new_content" rows="7" placeholder="엔트리 본문을 자유롭게 입력하세요..."></textarea>
-            </div>
-            <div style="font-size:11px;opacity:0.6;line-height:1.4;">
-                Target 로어북 <b>${escapeHtml(s.targetLorebook)}</b> 에 추가됩니다.
-                managed mode면 키워드 없이 저장되고 LL 선택 엔진이 주입을 통제합니다.
-            </div>
-        </div>
-        <div class="ll-suggest-footer">
-            <button class="ll-suggest-btn ll-suggest-btn-cancel" id="ll_new_cancel">취소</button>
-            <button class="ll-suggest-btn ll-suggest-btn-primary" id="ll_new_create"><i class="fa-solid fa-check"></i> 생성</button>
-        </div>
-    `;
-    document.body.appendChild(modal);
-    modal.showModal();
-
-    const close = () => { modal.close(); modal.remove(); };
-    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
-    modal.querySelector('.ll-suggest-close').addEventListener('click', close);
-    modal.querySelector('#ll_new_cancel').addEventListener('click', close);
-
-    const createBtn = modal.querySelector('#ll_new_create');
-    createBtn.addEventListener('click', async () => {
-        const title = modal.querySelector('#ll_new_title').value.trim();
-        const content = modal.querySelector('#ll_new_content').value;
-        const category = modal.querySelector('#ll_new_cat').value;
-        if (!title) {
-            toastr.warning('제목을 입력해주세요.', 'LivingLorebook');
-            return;
-        }
-        createBtn.disabled = true;
-        createBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 생성 중...';
-        try {
-            const res = await createManualEntry({ title, content, category });
-            clearSelectionCache();   // 새 후보 추가 → 선택 캐시 무효화
-            close();
-            await refreshPanel();
-            toastr.success(`"${res.title}" 엔트리 추가됨`, 'LivingLorebook');
-        } catch (err) {
-            console.error(`${LOG_PREFIX} manual entry create failed:`, err);
-            toastr.error(err.message || '엔트리 생성 실패', 'LivingLorebook');
-            createBtn.disabled = false;
-            createBtn.innerHTML = '<i class="fa-solid fa-check"></i> 생성';
-        }
-    });
-
-    setTimeout(() => modal.querySelector('#ll_new_title')?.focus(), 50);
-}
-
-// ============================================================
-// Suggest Modal
-// ============================================================
-
-let suggestState = {
-    suggestions: [],
-    userRequirements: '',
-    characterContext: '',
-};
-
-function createSuggestModal() {
-    if (document.querySelector('dialog.ll-suggest-modal')) return;
-
-    const modal = document.createElement('dialog');
-    modal.className = 'll-suggest-modal';
-    modal.innerHTML = `
-        <div class="ll-suggest-header">
-            <div class="ll-suggest-title">
-                <i class="fa-solid fa-wand-magic-sparkles"></i> 세계관 제안
-            </div>
-            <button class="ll-suggest-close" title="닫기">
-                <i class="fa-solid fa-xmark"></i>
-            </button>
-        </div>
-
-        <div class="ll-suggest-body">
-            <div class="ll-suggest-section">
-                <label class="ll-suggest-label">내가 넣고싶은 설정 (선택)</label>
-                <textarea class="ll-suggest-req" id="ll_suggest_req" rows="4"
-                    placeholder="예시: 주인공 집은 원룸이고, 친구는 한국계 2세야. 동네에 있는 카페 2개 정도 넣어줘..."></textarea>
-                <div class="ll-suggest-actions-top">
-                    <button class="ll-suggest-btn ll-suggest-btn-secondary" id="ll_suggest_regen">
-                        <i class="fa-solid fa-arrows-rotate"></i> 제안 받기 / 다시 받기
-                    </button>
-                </div>
-            </div>
-
-            <div class="ll-suggest-section">
-                <div class="ll-suggest-list-header">
-                    <label class="ll-suggest-label">제안된 엔트리</label>
-                    <div class="ll-suggest-list-controls">
-                        <button class="ll-suggest-mini-btn" id="ll_suggest_all">전체 선택</button>
-                        <button class="ll-suggest-mini-btn" id="ll_suggest_none">전체 해제</button>
-                    </div>
-                </div>
-                <div class="ll-suggest-list" id="ll_suggest_list">
-                    <div class="ll-suggest-empty">
-                        아직 제안이 없습니다. 위의 "제안 받기" 버튼을 눌러주세요.
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="ll-suggest-footer">
-            <button class="ll-suggest-btn ll-suggest-btn-cancel" id="ll_suggest_cancel">취소</button>
-            <button class="ll-suggest-btn ll-suggest-btn-primary" id="ll_suggest_generate">
-                <i class="fa-solid fa-check"></i> 선택한 항목 생성
-            </button>
-        </div>
-    `;
-    document.body.appendChild(modal);
-
-    // Events — click outside modal content (backdrop) closes it
-    modal.addEventListener('click', (e) => { if (e.target === modal) closeSuggestModal(); });
-    modal.querySelector('.ll-suggest-close').addEventListener('click', closeSuggestModal);
-    modal.querySelector('#ll_suggest_cancel').addEventListener('click', closeSuggestModal);
-
-    modal.querySelector('#ll_suggest_req').addEventListener('input', (e) => {
-        suggestState.userRequirements = e.target.value;
-    });
-
-    modal.querySelector('#ll_suggest_regen').addEventListener('click', handleSuggestRegenerate);
-    modal.querySelector('#ll_suggest_all').addEventListener('click', () => {
-        modal.querySelectorAll('.ll-suggest-item-check').forEach(cb => cb.checked = true);
-    });
-    modal.querySelector('#ll_suggest_none').addEventListener('click', () => {
-        modal.querySelectorAll('.ll-suggest-item-check').forEach(cb => cb.checked = false);
-    });
-    modal.querySelector('#ll_suggest_generate').addEventListener('click', handleSuggestGenerate);
-}
-
-function openSuggestModal() {
-    if (!settings.targetLorebook) {
-        toastr.warning('대상 로어북을 먼저 선택해주세요.');
-        return;
-    }
-    suggestState.suggestions = [];
-    suggestState.userRequirements = '';
-    suggestState.characterContext = getCharacterContext();
-
-    const dlg = document.querySelector('dialog.ll-suggest-modal');
-    if (dlg && !dlg.open) dlg.showModal();
-
-    const req = document.getElementById('ll_suggest_req');
-    if (req) req.value = '';
-    renderSuggestList();
-}
-
-function closeSuggestModal() {
-    const dlg = document.querySelector('dialog.ll-suggest-modal');
-    if (dlg?.open) dlg.close();
-}
-
-function renderSuggestList() {
-    const list = document.getElementById('ll_suggest_list');
-    if (!list) return;
-
-    if (suggestState.suggestions.length === 0) {
-        list.innerHTML = `<div class="ll-suggest-empty">아직 제안이 없습니다. 위의 "제안 받기" 버튼을 눌러주세요.</div>`;
-        return;
-    }
-
-    const catLabels = {
-        arc: '줄거리',
-        character: '캐릭터', relationship: '관계', location: '장소',
-        event: '사건', routine: '일상', item: '아이템', fact: '설정',
-    };
-
-    list.innerHTML = suggestState.suggestions.map((s, i) => `
-        <div class="ll-suggest-item" data-idx="${i}">
-            <label class="ll-suggest-item-head">
-                <input type="checkbox" class="ll-suggest-item-check" checked />
-                <select class="ll-suggest-item-cat">
-                    ${Object.entries(catLabels).map(([k, v]) =>
-                        `<option value="${k}"${s.category === k ? ' selected' : ''}>${v}</option>`,
-                    ).join('')}
-                </select>
-                <input type="text" class="ll-suggest-item-title" value="${escapeAttr(s.title || '')}" placeholder="제목" />
-            </label>
-            <div class="ll-suggest-item-reason">${escapeHtml(s.reason || '')}</div>
-            <textarea class="ll-suggest-item-draft" rows="2" placeholder="추가 메모 / 초안 (선택)">${escapeHtml(s.content || '')}</textarea>
-        </div>
-    `).join('');
-}
-
-async function handleSuggestRegenerate() {
-    const btn = document.getElementById('ll_suggest_regen');
-    const list = document.getElementById('ll_suggest_list');
-    if (!btn || !list) return;
-
-    // 현재 입력 수집
-    suggestState.userRequirements = document.getElementById('ll_suggest_req')?.value || '';
-
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 제안 생성 중...';
-    list.innerHTML = `<div class="ll-suggest-empty"><i class="fa-solid fa-spinner fa-spin"></i> AI 분석 중...</div>`;
-
-    try {
-        const suggestions = await suggestWorldEntries(
-            suggestState.characterContext,
-            suggestState.userRequirements,
-        );
-        suggestState.suggestions = suggestions;
-        renderSuggestList();
-        toastr.success(`${suggestions.length}개의 제안을 받았습니다.`);
-    } catch (err) {
-        console.error(`${LOG_PREFIX} Suggest failed:`, err);
-        toastr.error(err.message || '제안 받기에 실패했습니다.');
-        list.innerHTML = `<div class="ll-suggest-empty">제안 받기 실패. 다시 시도해주세요.</div>`;
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fa-solid fa-arrows-rotate"></i> 제안 받기 / 다시 받기';
-    }
-}
-
-async function handleSuggestGenerate() {
-    const modal = document.querySelector('.ll-suggest-modal');
-    if (!modal) return;
-
-    // 선택된 항목들 수집 (인라인 편집 반영)
-    const items = [];
-    modal.querySelectorAll('.ll-suggest-item').forEach(el => {
-        const checked = el.querySelector('.ll-suggest-item-check')?.checked;
-        if (!checked) return;
-        items.push({
-            title: el.querySelector('.ll-suggest-item-title')?.value?.trim() || 'untitled',
-            category: el.querySelector('.ll-suggest-item-cat')?.value || 'fact',
-            content: el.querySelector('.ll-suggest-item-draft')?.value?.trim() || '',
-        });
-    });
-
-    if (items.length === 0) {
-        toastr.warning('선택된 항목이 없습니다.');
-        return;
-    }
-
-    const btn = document.getElementById('ll_suggest_generate');
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 생성 중...';
-    }
-
-    try {
-        const userReq = document.getElementById('ll_suggest_req')?.value || '';
-        const created = await generateFromSuggestions(items, suggestState.characterContext, userReq);
-        toastr.success(`${created.length}개의 엔트리가 생성되었습니다.`);
-        closeSuggestModal();
-        refreshPanel();
-    } catch (err) {
-        console.error(`${LOG_PREFIX} Generate from suggestions failed:`, err);
-        toastr.error(err.message || '엔트리 생성에 실패했습니다.');
-    } finally {
-        if (btn) {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="fa-solid fa-check"></i> 선택한 항목 생성';
-        }
-    }
-}
+// 세계관 제안 모달 UI는 ui-suggest.js로 분리됨 (createSuggestModal / openSuggestModal import)
 
 function bindPanelEvents(panel) {
     // Close
@@ -1223,16 +835,32 @@ function bindSettingsInputs(panel) {
             return;
         }
 
-        // count가 없으면 실제로 벡터가 들어간 적이 없다는 뜻 (구버전이 0개 색인에도 시그니처를 찍었음)
-        const count = settings.vectorIndexCount || 0;
-        if (!indexed || count === 0) {
-            el.innerHTML = `${label} · <span style="opacity:0.7;">아직 색인 안 됨 — 재색인을 한 번 돌려주세요</span>`;
-        } else if (indexed !== current) {
-            el.innerHTML = `${label} · <span style="color:#f87171;">인덱스는 <b>${indexed}</b>로 만들어짐 — 차원이 달라 검색이 안 됩니다. 재색인 필요</span>`;
+        // ── 현재 채팅의 managed 로어북 기준으로 per-lorebook 상태 표시 ──
+        // (글로벌 vectorIndexCount는 "마지막 재색인한 것들의 합"이라 다른 채팅 값이 남아 헷갈림.
+        //  지문 map[name] = "임베더|엔트리수|내용해시" 에서 이 로어북의 실제 수를 뽑아 쓴다)
+        const map = (settings.vectorIndexByLorebook && typeof settings.vectorIndexByLorebook === 'object')
+            ? settings.vectorIndexByLorebook : {};
+        const managedNames = getEffectiveSelectionLorebooks().filter(name => isManagedMode(name));
+        const perLb = managedNames.map(name => {
+            const fp = map[name];
+            if (!fp) return { name, indexed: false, count: 0, sigMatch: false };
+            const parts = String(fp).split('|');       // [임베더, 수, 해시]
+            return { name, indexed: true, count: parseInt(parts[1], 10) || 0, sigMatch: parts[0] === current };
+        });
+        const notIndexed = perLb.filter(p => !p.indexed || p.count === 0);
+        const wrongSig = perLb.filter(p => p.indexed && p.count > 0 && !p.sigMatch);
+
+        if (notIndexed.length) {
+            el.innerHTML = `${label} · <span style="opacity:0.7;">아직 색인 안 됨: <b>${notIndexed.map(p => p.name).join(', ')}</b> — 채팅 열면 자동 색인되거나, 재색인 버튼</span>`;
+        } else if (wrongSig.length) {
+            el.innerHTML = `${label} · <span style="color:#f87171;">임베딩 소스가 바뀜 — 재색인 필요: <b>${wrongSig.map(p => p.name).join(', ')}</b></span>`;
         } else {
-            el.innerHTML = `${label} · <span style="color:#4ade80;">인덱스 일치 (${count}개 색인됨)</span>`;
+            const per = perLb.map(p => `${p.name} ${p.count}개`).join(' · ');
+            el.innerHTML = `${label} · <span style="color:#4ade80;">인덱스 일치 (${per})</span>`;
         }
     }
+    // 채팅 바뀔 때 밖(CHAT_CHANGED)에서도 이 상태줄을 다시 그릴 수 있게 참조 노출
+    refreshVectorStatusRef = refreshVectorSourceStatus;
 
     const engineEl = panel.querySelector('#ll_s_selection_engine');
     if (engineEl) {
@@ -1657,6 +1285,7 @@ async function renderTimeline() {
             tier: meta?.tier || 1,
             disabled: !!entry.disable,
             pinned: !!entry.constant,
+            live: !!meta?.live,
             createdAt: meta?.createdAt || 0,
             lastUpdated: meta?.lastUpdated,
             summary: meta?.summary || '',
@@ -1699,11 +1328,13 @@ async function renderTimeline() {
 
             const pinnedClass = entry.pinned ? ' ll-entry-pinned' : '';
             const pinBadge = entry.pinned ? ' <span class="ll-entry-pin-badge" title="핀됨 — 항상 inject"><i class="fa-solid fa-thumbtack"></i></span>' : '';
+            const liveBadge = entry.live ? ' <span class="ll-entry-live-badge" title="업데이트 대상 — 기억 정리 때 이 엔트리를 풀 내용으로 보내 갱신"><i class="fa-solid fa-rotate"></i> LIVE</span>' : '';
             html += `
-                <div class="ll-entry-card${disabledClass}${pinnedClass}" data-uid="${entry.uid}" data-category="${cat}" data-pinned="${entry.pinned ? '1' : '0'}">
+                <div class="ll-entry-card${disabledClass}${pinnedClass}" data-uid="${entry.uid}" data-category="${cat}" data-pinned="${entry.pinned ? '1' : '0'}" data-live="${entry.live ? '1' : '0'}">
                     <div class="ll-entry-header">
-                        <div class="ll-entry-title">${escapeHtml(entry.title)}${pinBadge}${entry.disabled ? ' <span class="ll-entry-hide-badge">HIDE</span>' : ''}</div>
+                        <div class="ll-entry-title">${escapeHtml(entry.title)}${pinBadge}${liveBadge}${entry.disabled ? ' <span class="ll-entry-hide-badge">HIDE</span>' : ''}</div>
                         <div class="ll-entry-actions">
+                            <button class="ll-entry-btn ll-entry-live${entry.live ? ' ll-entry-live-on' : ''}" title="${entry.live ? '업데이트 대상 해제' : '업데이트 대상 지정 (기억 정리 때 갱신)'}"><i class="fa-solid fa-rotate"></i></button>
                             <button class="ll-entry-btn ll-entry-pin${entry.pinned ? ' ll-entry-pin-on' : ''}" title="${entry.pinned ? '핀 해제' : '핀 (항상 inject)'}"><i class="fa-solid fa-thumbtack"></i></button>
                             <button class="ll-entry-btn ll-entry-edit" title="편집"><i class="fa-solid fa-pen"></i></button>
                             <button class="ll-entry-btn ll-entry-hide" title="${entry.disabled ? '재활성화' : '하이드'}"><i class="fa-solid fa-${entry.disabled ? 'eye-slash' : 'eye'}"></i></button>
@@ -1737,7 +1368,10 @@ async function renderTimeline() {
             const uid = card?.dataset?.uid;
             if (!uid) return;
 
-            if (btn.classList.contains('ll-entry-pin')) {
+            if (btn.classList.contains('ll-entry-live')) {
+                const currentlyLive = card?.dataset?.live === '1';
+                handleEntryLiveToggle(uid, !currentlyLive);
+            } else if (btn.classList.contains('ll-entry-pin')) {
                 const currentlyPinned = card?.dataset?.pinned === '1';
                 handleEntryPinToggle(uid, !currentlyPinned);
             } else if (btn.classList.contains('ll-entry-edit')) {
@@ -1751,178 +1385,7 @@ async function renderTimeline() {
     });
 }
 
-function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
-
-function escapeAttr(str) {
-    return String(str ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
-
-// ============================================================
-// Entry Edit / Hide / Delete
-// ============================================================
-
-const CATEGORY_LABELS = {
-    arc: '줄거리',
-    character: '캐릭터', relationship: '관계', location: '장소',
-    event: '사건', routine: '일상', item: '아이템', fact: '설정',
-};
-
-function openInlineEditor(card, uid) {
-    if (!card) return;
-    if (card.classList.contains('ll-editing')) return; // 이미 편집 중
-
-    const title = card.querySelector('.ll-entry-title')?.textContent.replace(/HIDE\s*$/, '').trim() || '';
-    const rawContent = card.querySelector('.ll-entry-content')?.dataset?.raw || '';
-    const currentCat = card.dataset.category || 'fact';
-    const currentKeywords = Array.from(card.querySelectorAll('.ll-entry-keyword')).map(el => el.textContent);
-
-    card.classList.add('ll-editing');
-
-    const editForm = document.createElement('div');
-    editForm.className = 'll-entry-edit-form';
-    editForm.innerHTML = `
-        <div class="ll-edit-row">
-            <label>제목</label>
-            <input type="text" class="ll-edit-title" value="${escapeAttr(title)}" />
-        </div>
-        <div class="ll-edit-row">
-            <label>카테고리</label>
-            <select class="ll-edit-cat">
-                ${Object.entries(CATEGORY_LABELS).map(([k, v]) =>
-                    `<option value="${k}"${currentCat === k ? ' selected' : ''}>${v}</option>`,
-                ).join('')}
-            </select>
-        </div>
-        <div class="ll-edit-row">
-            <label>내용</label>
-            <textarea class="ll-edit-content" rows="6">${escapeHtml(rawContent)}</textarea>
-        </div>
-        <div class="ll-edit-row">
-            <label>키워드 (쉼표 구분)</label>
-            <input type="text" class="ll-edit-keywords" value="${escapeAttr(currentKeywords.join(', '))}" />
-        </div>
-        <div class="ll-edit-actions">
-            <button class="ll-edit-cancel">취소</button>
-            <button class="ll-edit-save">저장</button>
-        </div>
-    `;
-
-    // 기존 컨텐츠/키워드/헤더 버튼 숨기기
-    card.querySelector('.ll-entry-content').style.display = 'none';
-    card.querySelector('.ll-entry-keywords')?.style.setProperty('display', 'none');
-    card.querySelector('.ll-entry-actions').style.display = 'none';
-    card.appendChild(editForm);
-
-    editForm.querySelector('.ll-edit-cancel').addEventListener('click', () => {
-        closeInlineEditor(card);
-    });
-    editForm.querySelector('.ll-edit-save').addEventListener('click', async () => {
-        await saveInlineEdit(card, uid, editForm);
-    });
-}
-
-function closeInlineEditor(card) {
-    card.classList.remove('ll-editing');
-    card.querySelector('.ll-entry-edit-form')?.remove();
-    card.querySelector('.ll-entry-content').style.display = '';
-    card.querySelector('.ll-entry-keywords')?.style.removeProperty('display');
-    card.querySelector('.ll-entry-actions').style.display = '';
-}
-
-async function saveInlineEdit(card, uid, form) {
-    const newTitle = form.querySelector('.ll-edit-title')?.value?.trim() || 'untitled';
-    const newContent = form.querySelector('.ll-edit-content')?.value?.trim() || '';
-    const newCat = form.querySelector('.ll-edit-cat')?.value || 'fact';
-    const keywordsRaw = form.querySelector('.ll-edit-keywords')?.value || '';
-    const newKeywords = keywordsRaw.split(',').map(k => k.trim()).filter(Boolean);
-
-    try {
-        const data = await loadTargetLorebook();
-        if (!data) throw new Error('로어북 로드 실패');
-
-        updateEntryFields(data, uid, {
-            title: newTitle,
-            content: newContent,
-            keywords: newKeywords,
-            category: newCat,
-        }, settings.targetLorebook);
-
-        await saveLorebook(settings.targetLorebook, data);
-        refreshEditor();
-        toastr.success('저장되었습니다.');
-        await renderTimeline();
-    } catch (err) {
-        console.error(`${LOG_PREFIX} Edit save failed:`, err);
-        toastr.error(err.message || '저장에 실패했습니다.');
-    }
-}
-
-async function handleEntryHideToggle(uid) {
-    try {
-        const data = await loadTargetLorebook();
-        if (!data?.entries?.[uid]) throw new Error('엔트리를 찾을 수 없습니다');
-
-        const entry = data.entries[uid];
-        if (entry.disable) {
-            enableEntry(data, uid);
-            toastr.info('재활성화되었습니다.');
-        } else {
-            deactivateEntry(data, uid);
-            toastr.info('하이드되었습니다.');
-        }
-
-        await saveLorebook(settings.targetLorebook, data);
-        refreshEditor();
-        await renderTimeline();
-    } catch (err) {
-        console.error(`${LOG_PREFIX} Hide toggle failed:`, err);
-        toastr.error(err.message || '처리에 실패했습니다.');
-    }
-}
-
-async function handleEntryPinToggle(uid, pinned) {
-    try {
-        const data = await loadTargetLorebook();
-        if (!data?.entries?.[uid]) throw new Error('엔트리를 찾을 수 없습니다');
-
-        setEntryPinned(data, uid, pinned);
-        await saveLorebook(settings.targetLorebook, data);
-        refreshEditor();
-        clearSelectionCache();
-        await renderTimeline();
-        toastr.info(pinned ? '📌 핀됨 — 항상 inject됩니다.' : '핀 해제됨.');
-    } catch (err) {
-        console.error(`${LOG_PREFIX} Pin toggle failed:`, err);
-        toastr.error(err.message || '처리에 실패했습니다.');
-    }
-}
-
-async function handleEntryDelete(uid) {
-    if (!confirm('이 엔트리를 완전히 삭제하시겠습니까? 되돌릴 수 없습니다.')) return;
-
-    try {
-        const data = await loadTargetLorebook();
-        if (!data?.entries?.[uid]) throw new Error('엔트리를 찾을 수 없습니다');
-
-        deleteEntry(data, uid, settings.targetLorebook);
-        await saveLorebook(settings.targetLorebook, data);
-        refreshEditor();
-        toastr.success('삭제되었습니다.');
-        await renderTimeline();
-    } catch (err) {
-        console.error(`${LOG_PREFIX} Delete failed:`, err);
-        toastr.error(err.message || '삭제에 실패했습니다.');
-    }
-}
+// 엔트리 편집/토글/삭제 액션은 ui-entry.js로 분리됨 (openInlineEditor / handleEntry* import)
 
 // ============================================================
 // Panel Refresh
@@ -2090,6 +1553,7 @@ async function handleToolbarAction(action) {
         case 'add-entry':
             openNewEntryModal();
             return;
+
 
         case 'build-confirm':
             await handleBuildWorld();
@@ -2802,6 +2266,7 @@ function registerEventListeners() {
             renderSelectionLorebookList(panel);
             populateAddLorebookDropdown(panel);
             populateTargetLorebookDropdown(panel);
+            refreshVectorStatusRef?.();   // 벡터 상태줄도 현재 채팅 로어북 기준으로 갱신
         }
 
         // 이 채팅의 로어북이 아직 색인 안 됐으면 조용히 자동 재색인 (이미 된 건 스킵)

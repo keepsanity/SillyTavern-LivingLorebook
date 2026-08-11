@@ -104,12 +104,27 @@ export async function organize(chat, characterContext = '', options = {}) {
         return { added: 0, updated: 0, deactivated: 0, processedRange: [startIdx, endIdx] };
     }
 
-    // 현재 엔트리 목록 생성
-    const currentEntries = [];
+    // 현재 엔트리 목록 생성 — "업데이트 대상(live)" 플래그된 것만 풀 내용,
+    // 나머지는 제목만 보낸다 (풀 로어북 전송 토큰 부담 제거 + 중복 방지는 제목으로 유지).
+    const liveLines = [];
+    const staticLines = [];
+    const liveUids = new Set();
     for (const [uid, entry] of Object.entries(data.entries || {})) {
         if (entry.disable) continue;
-        currentEntries.push(`[uid:${uid}] ${entry.comment || 'untitled'}: ${entry.content}`);
+        const meta = getMetadata(uid, settings.targetLorebook);
+        const title = entry.comment || 'untitled';
+        if (meta?.live) {
+            liveUids.add(String(uid));
+            liveLines.push(`[uid:${uid}] ${title}: ${entry.content}`);
+        } else {
+            staticLines.push(`[uid:${uid}] ${title}`);
+        }
     }
+    const currentEntriesBlock =
+        `=== UPDATABLE entries (you MAY "update" or "deactivate" these; full content shown) ===\n`
+        + (liveLines.join('\n') || '(none flagged as updatable)')
+        + `\n\n=== EXISTING entries (titles only — de-dup reference ONLY; never "update"/"deactivate"/re-"add" these) ===\n`
+        + (staticLines.join('\n') || '(none)');
 
     // 대화 텍스트 구성
     const conversationText = recentMessages.map(m => {
@@ -124,11 +139,17 @@ export async function organize(chat, characterContext = '', options = {}) {
 
     const systemPrompt = `You are a memory manager for mature/adult roleplay. Output ONLY valid JSON. No markdown fences, no explanations.
 
-CRITICAL: Before adding ANY new entry, check if similar information already exists in:
-1. The current lorebook entries below — if it does, use "update" (with existing uid), do NOT "add" a duplicate
-2. The character card/persona info below — if it's already there, do NOT add it at all${charInfoBlock}`;
+CRITICAL rules for the entry list (it has TWO sections):
+- "update" and "deactivate" are allowed ONLY for entries in the "UPDATABLE entries" section (use their uid). NEVER "update" or "deactivate" an entry from the "EXISTING entries (titles only)" section — you only see their titles, so you cannot judge them.
+- Before "add"ing ANY new entry, check BOTH sections AND the character/persona info below — if similar info already exists anywhere, do NOT "add" a duplicate.
+- The character card/persona info is already in the prompt — do NOT create entries for it.
+
+For each "add", include a boolean "live" field:
+- live:true ONLY when the entry is EVOLVING STATE that will keep changing and is worth updating over time — e.g. a relationship's current dynamic, a character's current status/condition/mood, stats, inventory, an ongoing situation/quest.
+- live:false for STATIC facts — world lore, fixed background, a one-time past event, a place description.
+- Be conservative: MOST entries are static (false). Only flag the few that genuinely need ongoing updates.${charInfoBlock}`;
     const userPrompt = settings.organizePrompt
-        .replace('{{currentEntries}}', currentEntries.join('\n') || '(none)')
+        .replace('{{currentEntries}}', currentEntriesBlock)
         .replace('{{conversation}}', conversationText);
 
     console.log(`${LOG_PREFIX} Organizing memories (${recentMessages.length} messages)...`);
@@ -168,6 +189,11 @@ CRITICAL: Before adding ANY new entry, check if similar information already exis
             });
             if (entry) {
                 result.added++;
+                // AI가 "계속 변할 상태"로 판단한 엔트리는 LIVE(업데이트 대상)로 자동 지정.
+                // 사용자는 카드의 🔄 버튼으로 언제든 끄고 켤 수 있음(추천이지 강제 아님).
+                if (item.live === true) {
+                    setMetadata(String(entry.uid), { live: true }, settings.targetLorebook);
+                }
                 newVectorEntries.push({
                     uid: String(entry.uid),
                     title: item.title,
@@ -184,6 +210,12 @@ CRITICAL: Before adding ANY new entry, check if similar information already exis
             const uid = String(item.uid);
             const entry = data.entries?.[uid];
             if (!entry) continue;
+            // "업데이트 대상" 플래그된 엔트리만 수정 허용 — AI가 static 엔트리 update를 반환해도 무시.
+            // (static은 제목만 보냈으니 온전히 못 고침 + 사용자가 고정으로 둔 것)
+            if (!liveUids.has(uid)) {
+                console.log(`${LOG_PREFIX} update 무시: uid=${uid} 는 업데이트 대상 아님(static)`);
+                continue;
+            }
 
             // 기존 벡터 삭제
             deleteHashes.push(getEntryHash(uid, entry.content));
@@ -218,6 +250,12 @@ CRITICAL: Before adding ANY new entry, check if similar information already exis
     if (Array.isArray(instructions.deactivate)) {
         for (const item of instructions.deactivate) {
             const uid = String(item.uid);
+            // update와 동일 정책: LIVE(업데이트 대상)만 AI가 건드릴 수 있다.
+            // static 엔트리는 제목만 보냈으므로 "더 이상 유효하지 않음"을 제목만으로 판단하게 두면 오판 위험.
+            if (!liveUids.has(uid)) {
+                console.log(`${LOG_PREFIX} deactivate 무시: uid=${uid} 는 업데이트 대상 아님(static)`);
+                continue;
+            }
             if (deactivateEntry(data, uid)) {
                 deleteHashes.push(getEntryHash(uid, data.entries[uid]?.content || ''));
                 result.deactivated++;

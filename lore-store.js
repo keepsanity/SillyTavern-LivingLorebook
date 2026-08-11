@@ -175,9 +175,11 @@ Categories to extract (only create entries for categories where something actual
 - "fact" is ONLY for world rules, lore, or background info revealed. NOT for character traits (use character) or events (use event).
 
 Output a JSON object with these fields:
-- "add": array of new entries, each with { "title", "content", "summary", "keywords": [], "category" }
+- "add": array of new entries, each with { "title", "content", "summary", "keywords": [], "category", "live" }
 - "update": array of entries to modify, each with { "uid", "title", "newContent", "summary", "reason" }
 - "deactivate": array of entries no longer valid, each with { "uid", "title", "reason" }
+
+The "live" field (on add) — true ONLY for evolving state worth updating over time (relationship dynamics, character current status, stats, inventory, ongoing situation); false for static facts (world lore, fixed background, one-time events). Be conservative — most entries are static.
 
 The "summary" field (REQUIRED for add/update):
 - One-line retrieval hint describing WHEN to select this entry.

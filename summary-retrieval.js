@@ -765,28 +765,54 @@ async function _selectFast(candidates, queries, settings, lorebooks, engine) {
 }
 
 /**
- * 로어북 하나를 벡터 재색인 + 이 로어북이 어떤 임베더로 색인됐는지 per-lorebook 기록.
- * per-lorebook 시그니처가 있어야 "채팅마다 로어북이 달라도 이미 색인된 건 다시 안 함"이 가능.
+ * 로어북 "지문" — 이 로어북이 지금 어떤 상태로 색인돼야 하는지 나타내는 값.
+ * `임베더 | 엔트리수 | 내용해시` 로, 임베더가 바뀌거나 **엔트리가 추가/삭제/수정**되면 값이 달라진다.
+ * → 예전처럼 임베더만 보지 않고 내용 변화까지 감지 → 리빙 로어북에서 stale을 안 놓친다.
+ * (색인 대상 = disable/constant 제외 — 후보 풀·재색인과 동일 기준)
+ */
+function lorebookFingerprint(data, embedderSig) {
+    let count = 0;
+    let acc = 0;
+    for (const [uid, entry] of Object.entries(data?.entries || {})) {
+        if (entry.disable || entry.constant) continue;
+        count++;
+        acc = (acc * 31 + getStringHash(`${uid}:${entry.content || ''}`)) | 0;
+    }
+    return `${embedderSig}|${count}|${acc}`;
+}
+
+/**
+ * 로어북 하나를 벡터 재색인 + per-lorebook 지문 기록.
+ * @param {string} lbName
+ * @param {{data?: object, fingerprint?: string}} [opts] - 이미 로드/계산했으면 재사용(중복 로드 회피)
  * @returns {Promise<number>} 실제 색인된 엔트리 수
  */
-async function reindexOneLorebook(lbName, signature) {
-    const data = await loadAnyLorebook(lbName);
+async function reindexOneLorebook(lbName, opts = {}) {
+    const data = opts.data || await loadAnyLorebook(lbName);
     if (!data || !data.entries) return 0;
     const entries = [];
     for (const [uid, entry] of Object.entries(data.entries)) {
         if (entry.disable || entry.constant) continue; // 후보 풀과 동일 기준
         entries.push({ uid: String(uid), content: entry.content || '', title: entry.comment || '' });
     }
-    if (entries.length === 0) return 0;
-
-    await reindexCollection(getCollectionId(lbName), entries);
 
     const settings = getSettings();
     // shared-ref 회피: DEFAULT에 안 넣고 여기서 own 프로퍼티로 lazy 생성
     if (!settings.vectorIndexByLorebook || typeof settings.vectorIndexByLorebook !== 'object') {
         settings.vectorIndexByLorebook = {};
     }
-    settings.vectorIndexByLorebook[lbName] = signature;
+    const fp = opts.fingerprint || lorebookFingerprint(data, getVectorSourceSignature());
+
+    // 색인할 엔트리가 0개여도 지문은 기록한다 — 안 그러면 이 로어북이 영영 stale로 남아
+    // 채팅 바꿀 때마다 매번 재검사 대상이 된다(수렴 안 함).
+    if (entries.length === 0) {
+        settings.vectorIndexByLorebook[lbName] = fp;
+        saveSettings();
+        return 0;
+    }
+
+    await reindexCollection(getCollectionId(lbName), entries);
+    settings.vectorIndexByLorebook[lbName] = fp;
 
     console.log(`${LOG_PREFIX} Reindexed ${entries.length} entries in ${getCollectionId(lbName)}`);
     return entries.length;
@@ -802,7 +828,7 @@ export async function reindexManagedLorebooks() {
     const signature = getVectorSourceSignature();
     let totalEntries = 0;
     for (const lbName of lorebooks) {
-        totalEntries += await reindexOneLorebook(lbName, signature);
+        totalEntries += await reindexOneLorebook(lbName); // 지문은 내부에서 계산·저장
     }
 
     // 이 인덱스가 어떤 임베딩 소스로 만들어졌는지 기록 → 이후 소스가 바뀌면 감지 가능.
@@ -821,8 +847,9 @@ export async function reindexManagedLorebooks() {
 }
 
 /**
- * 채팅 열 때 호출 — 지금 managed 로어북 중 "현재 임베더로 아직 색인 안 된" 것만 조용히 재색인.
- * 이미 같은 임베더로 색인된 로어북은 건드리지 않음(비용 0).
+ * 채팅 열 때 호출 — managed 로어북 중 "지문이 바뀐(= 아직 색인 안 됐거나 내용이 변한)" 것만 조용히 재색인.
+ * 지문 = 임베더 + 엔트리수 + 내용해시 → 임베더가 같아도 엔트리가 추가/수정되면 재색인된다.
+ * 지문이 같은 로어북은 건드리지 않음(비용 0).
  * 벡터를 쓰는 엔진(hybrid) + 마스터 ON일 때만 동작.
  * @returns {Promise<{reindexed: string[], entries: number} | null>} null = 할 일 없었음
  */
@@ -836,13 +863,21 @@ export async function autoReindexStaleLorebooks() {
         ? settings.vectorIndexByLorebook : {};
 
     const managed = getEffectiveSelectionLorebooks().filter(name => isManagedMode(name));
-    const stale = managed.filter(name => map[name] !== signature);
-    if (stale.length === 0) return null;
+    if (managed.length === 0) return null;
+
+    // 각 로어북의 현재 지문 계산 → 저장된 지문과 다르면 재색인 (1회 로드, stale이면 그 data 재사용)
+    const work = []; // { lbName, data, fingerprint }
+    for (const lbName of managed) {
+        const data = await loadAnyLorebook(lbName);
+        const fp = lorebookFingerprint(data, signature);
+        if (map[lbName] !== fp) work.push({ lbName, data, fingerprint: fp });
+    }
+    if (work.length === 0) return null;
 
     let totalEntries = 0;
     const reindexed = [];
-    for (const lbName of stale) {
-        const n = await reindexOneLorebook(lbName, signature);
+    for (const { lbName, data, fingerprint } of work) {
+        const n = await reindexOneLorebook(lbName, { data, fingerprint });
         if (n > 0) { totalEntries += n; reindexed.push(lbName); }
     }
     if (reindexed.length === 0) return null;
