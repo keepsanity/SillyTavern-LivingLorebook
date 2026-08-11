@@ -5,8 +5,25 @@
 
 import { characters, this_chid } from '../../../../script.js';
 import { power_user } from '../../../power-user.js';
+import { world_names } from '../../../world-info.js';
+import { getSettings } from './lore-store.js';
 
 const LOG_PREFIX = '[LivingLorebook]';
+
+/**
+ * 사이드바(확장 설정)의 대상 로어북 dropdown 채우기.
+ * 여러 곳(사이드바 초기화 / 툴바에서 로어북 새로 만들 때)에서 부르는 leaf 유틸.
+ */
+export function populateLorebookDropdown() {
+    const $select = $('#ll_target_lorebook');
+    $select.find('option:not(:first)').remove();
+
+    const names = world_names || [];
+    for (const name of [...names].sort()) {
+        $select.append(`<option value="${name}">${name}</option>`);
+    }
+    $select.val(getSettings().targetLorebook || '');
+}
 
 /**
  * 현재 캐릭터 카드 + 유저 페르소나를 한 덩어리 텍스트로 — organize/build/제안이 "이미 프롬프트에 있는 정보"
