@@ -247,7 +247,12 @@ export const PANEL_HTML = `
                 <div class="ll-settings-row ll-eng-fast">
                     <label>상대 컷오프 비율</label>
                     <input class="ll-settings-input" id="ll_s_vector_ratio" type="number" min="0" max="1" step="0.05" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">0 = 끔(권장). 올리면 1등 대비 낮은 꼬리 컷</span>
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">0.6 = 양쪽 엔진 동의한 것만(권장). 낮출수록 BM25 단독 매칭도 허용. 0=끔</span>
+                </div>
+                <div class="ll-settings-row ll-eng-fast">
+                    <label>단어매칭 바닥선</label>
+                    <input class="ll-settings-input" id="ll_s_bm25_floor" type="number" min="0" max="1" step="0.05" />
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">1등 대비 이 비율 미만은 제외. 무관한 로어가 딸려오면 ↑ (0=끔)</span>
                 </div>
                 <div class="ll-settings-row ll-eng-vec">
                     <label>유사도 하한 (threshold)</label>

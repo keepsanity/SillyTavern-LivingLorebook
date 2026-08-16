@@ -79,6 +79,15 @@ export function restoreChatMetadata() {
         return;
     }
 
+    // chat_metadata가 완전히 빈 객체면 "채팅이 아직 로드 안 됨"으로 본다.
+    // ST가 채팅을 채우기 전에 CHAT_CHANGED가 튀는 경우가 있는데(특히 모바일 브라우저 재진입),
+    // 여기서 지워버리면 target/selection이 통째로 날아가 "managed 로어북 0개 / 색인 없음"으로 보인다.
+    // 진짜 빈 채팅이면 곧 이어지는 이벤트에서 정상 복원되므로 건너뛰는 편이 안전하다.
+    if (Object.keys(chat_metadata).length === 0) {
+        console.warn(`${LOG_PREFIX} chat_metadata가 비어있음 — 아직 로드 전으로 보고 복원 건너뜀 (기존 target "${settings.targetLorebook}" 유지)`);
+        return;
+    }
+
     // 옛 객체 키 1회 마이그레이션 (있으면 새 단일 키로 옮김)
     const legacy = chat_metadata[METADATA_KEY];
     if (legacy && typeof legacy === 'object') {

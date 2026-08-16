@@ -290,6 +290,10 @@ export function bindSettingsInputs(panel) {
             refreshVectorSourceStatus();
         });
     }
+    bind('#ll_s_bm25_floor', 'bm25MinScoreRatio', v => {
+        const n = parseFloat(v);
+        return (Number.isFinite(n) && n >= 0 && n <= 1) ? n : 0.35;
+    });
     bind('#ll_s_vector_ratio', 'vectorCutoffRatio', v => {
         const n = parseFloat(v);
         return (Number.isFinite(n) && n >= 0 && n <= 1) ? n : 0;

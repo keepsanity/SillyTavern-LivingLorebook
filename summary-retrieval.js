@@ -235,7 +235,102 @@ export async function selectEntries(chat) {
     }
 }
 
+/**
+ * ST의 WI 후보 목록에 managed 로어북 엔트리를 끼워 넣는다. (WORLDINFO_ENTRIES_LOADED 핸들러)
+ *
+ * ⚠️ 이게 없으면 LL은 아무것도 주입하지 못한다:
+ * ST는 global/character/chat/persona 4곳에 **바인딩된** 로어북만 순회하고,
+ * WORLDINFO_FORCE_ACTIVATE는 "이미 순회 중인 엔트리를 활성으로 승격"시킬 뿐 새로 추가하지 않는다.
+ * LL의 target은 ST가 모르는 자체 키(ll_target_lorebook)라 순회 대상이 아니었다 → force-activate가 전부 무시됨.
+ * 여기서 chatLore 배열에 push하면(emit 직후 ST가 그 배열로 목록을 조립하므로) 순회 대상이 된다.
+ *
+ * managed 로어북은 키워드가 비어 있어 스스로 활성화되지 않고, LL이 고른 것만 force-activate로 켜진다.
+ * @param {{globalLore: object[], characterLore: object[], chatLore: object[], personaLore: object[]}} lore
+ */
+export async function injectManagedEntriesIntoWI(lore) {
+    const settings = getSettings();
+    if (!settings.enabled || !settings.summarySelectionEnabled) return;
+
+    const books = getEffectiveSelectionLorebooks().filter(name => isManagedMode(name));
+    if (books.length === 0) return;
+
+    // 이미 ST가 들고 있는 것(사용자가 별도로 바인딩해둔 경우)과 중복 방지
+    const seen = new Set();
+    for (const arr of [lore.globalLore, lore.characterLore, lore.chatLore, lore.personaLore]) {
+        if (!Array.isArray(arr)) continue;
+        for (const e of arr) seen.add(`${e.world}.${e.uid}`);
+    }
+
+    let added = 0;
+    for (const lbName of books) {
+        const data = await loadAnyLorebook(lbName);
+        if (!data?.entries) continue;
+        for (const [uid, entry] of Object.entries(data.entries)) {
+            if (entry.disable) continue;
+            const key = `${lbName}.${entry.uid ?? uid}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const { uid: _uid, ...rest } = entry;
+            // 키워드는 비워서 ST가 **자체 발동**시키지 못하게 한다 — managed 모드의 계약은 "LL이 통제".
+            // (managed 전환은 LL 메타데이터가 있는 엔트리의 키워드만 지운다. 외부에서 추가된 엔트리는
+            //  키워드가 살아있어서, ST 순회 대상이 된 지금은 엉뚱한 엔트리가 키워드로 튀어나올 수 있다.)
+            // constant(핀)는 그대로 둬서 항상 활성 유지.
+            lore.chatLore.push({ uid: entry.uid ?? uid, world: lbName, ...rest, key: [], keysecondary: [] });
+            added++;
+        }
+    }
+    if (added > 0) {
+        console.log(`${LOG_PREFIX} WI 후보에 managed 엔트리 ${added}개 주입 (books: ${books.join(', ')})`);
+    }
+}
+
+/**
+ * managed 로어북의 핀(constant) 엔트리 수집 — **항상 주입 대상**.
+ *
+ * ⚠️ 예전엔 "constant면 ST WI가 알아서 활성화한다"고 보고 후보에서 빼기만 했는데, 그건 로어북이
+ * ST에 바인딩(캐릭터/채팅/페르소나/글로벌)돼 있을 때만 참이다. LL의 target은 ST가 모르는
+ * 자체 키(chat_metadata.ll_target_lorebook)라서, ST에 안 붙여둔 로어북의 핀 엔트리는
+ * **아무도 주입해주지 않는다** → LL이 직접 force-activate 한다.
+ */
+async function collectPinnedEntries() {
+    const lorebooks = getEffectiveSelectionLorebooks().filter(name => isManagedMode(name));
+    const out = [];
+    for (const lbName of lorebooks) {
+        const data = await loadAnyLorebook(lbName);
+        if (!data?.entries) continue;
+        for (const [uid, entry] of Object.entries(data.entries)) {
+            if (entry.disable || !entry.constant) continue;
+            out.push({
+                compositeKey: `${lbName}::${uid}`,
+                lorebookName: lbName,
+                uid: String(uid),
+                title: entry.comment || 'untitled',
+                content: entry.content || '',
+                category: getMetadata(uid, lbName)?.category || 'fact',
+                summary: '',
+                rawEntry: entry,
+            });
+        }
+    }
+    return out;
+}
+
+/** 선택 결과 + 핀 엔트리 병합 (핀은 선택 엔진/maxK와 무관하게 항상 들어간다) */
 async function _selectEntriesImpl(chat) {
+    const result = await _selectCore(chat);
+    const pinned = await collectPinnedEntries();
+    if (pinned.length === 0) return result;
+
+    const selected = Array.isArray(result.entries) ? result.entries : [];
+    const seen = new Set(selected.map(e => e.compositeKey));
+    const merged = [...pinned.filter(p => !seen.has(p.compositeKey)), ...selected];
+
+    // 통계는 병합된 최종 주입분 기준으로 다시 기록 (상태바가 실제 주입량을 말하게)
+    await measureAndStoreInjectionStats(merged, result.fromCache);
+    return { ...result, entries: merged, stage: `${result.stage} +pinned${pinned.length}` };
+}
+
+async function _selectCore(chat) {
     const settings = getSettings();
     const allLorebooks = getEffectiveSelectionLorebooks();
 
@@ -708,7 +803,23 @@ async function _selectFast(candidates, queries, settings, lorebooks, engine) {
         const t0 = performance.now();
         const ranker = buildCandidateRanker(candidates);
         // 융합 전이므로 maxK보다 넉넉히 뽑아둔다 (벡터가 못 본 걸 BM25가 끌어올릴 여지)
-        const ranked = ranker.search(queries.bm25, Math.max(maxK * 3, settings.bm25PrefilterK || 30));
+        let ranked = ranker.search(queries.bm25, Math.max(maxK * 3, settings.bm25PrefilterK || 30));
+
+        // 관련도 바닥선 — BM25는 "쿼리 단어가 하나라도 겹치면 score>0"이라 통과시킨다.
+        // 채팅 20개를 쿼리로 쓰면 흔한 단어 하나만 걸려도 전 엔트리가 후보가 되고,
+        // 그러면 maxK가 유일한 필터라 매 턴 상한을 무의미하게 꽉 채운다(무관한 인물 로어까지).
+        // 1등 점수 대비 비율로 꼬리를 잘라 "진짜 겹치는 것"만 남긴다. 0이면 끔(옛 동작).
+        const floorRatio = typeof settings.bm25MinScoreRatio === 'number' ? settings.bm25MinScoreRatio : 0.35;
+        if (floorRatio > 0 && ranked.length > 0) {
+            const cut = ranked[0].score * floorRatio;
+            const kept = ranked.filter(r => r.score >= cut);
+            if (kept.length > 0) {
+                if (kept.length < ranked.length) {
+                    console.log(`${LOG_PREFIX} BM25 바닥선 ${floorRatio}: ${ranked.length} → ${kept.length}개 (컷 ${cut.toFixed(3)})`);
+                }
+                ranked = kept;
+            }
+        }
         ranked.forEach((r, i) => bRanks.set(r.entry.compositeKey, i + 1));
         bmMs = performance.now() - t0;
     }

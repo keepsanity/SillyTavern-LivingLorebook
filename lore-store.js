@@ -88,7 +88,9 @@ export const DEFAULT_SETTINGS = {
     //   0.5 → 34개 생존 · 0.55 → 23개 · 0.6 → 16개 · 0.65 → 11개 · 0.7 → 7개
     // 0.6이면 maxK(12)보다 약간 넉넉해 BM25가 끼어들 여지를 남기면서 무관한 꼬리는 잘라낸다.
     vectorScoreThreshold: 0.6,
-    vectorCutoffRatio: 0,              // 상대 컷오프 — 1등 RRF 점수 × 비율 미만 잘라냄. 0이면 끔(maxK만 적용)
+    // 상대 컷오프 — 1등 RRF 점수 × 비율 미만 잘라냄. 0이면 끔(maxK만 적용).
+    // 0.6 = "양쪽 엔진이 동의한 것"만 남김 (BM25 단독 매칭은 1등 대비 0.32~0.48이라 잘림).
+    vectorCutoffRatio: 0.6,
     vectorSelectMaxK: 12,              // 최종 주입 상한 (사용자 조절)
     hybridVectorWeight: 1,             // RRF 가중치 — 벡터(의미) 쪽
     hybridBm25Weight: 1,               // RRF 가중치 — BM25(정확한 단어) 쪽
@@ -98,6 +100,9 @@ export const DEFAULT_SETTINGS = {
     aiSelectK: 8,                      // AI 최종 선택 개수
     bm25PrefilterEnabled: true,        // BM25 텍스트 매칭 prefilter (vector 대체) — 권장 기본 ON
     bm25PrefilterK: 30,                // BM25 prefilter top-K (Enabled시 후보가 이보다 많을 때만)
+    // BM25 관련도 바닥선 — 1등 점수 대비 이 비율 미만은 후보에서 제외. 0이면 끔.
+    // BM25는 단어 하나만 겹쳐도 score>0이라, 없으면 maxK가 유일한 필터가 되어 매 턴 상한을 꽉 채운다.
+    bm25MinScoreRatio: 0.35,
     // (deprecated) vectorPrefilter* — vector hash 매칭 불안정으로 BM25로 교체됨
     vectorPrefilterEnabled: false,
     vectorPrefilterK: 30,
@@ -335,6 +340,24 @@ export function initStore(context) {
         _settings.vectorIndexSignature = '';
         _settings._selectionEngineV3 = true;
         console.log('[LivingLorebook] Migrated selection engine to RRF hybrid (컷오프 초기화, 재색인 필요)');
+    }
+
+    // Migration v4: 상대 컷오프를 다시 켠다 (v3에서 0으로 꺼뒀던 것).
+    //
+    // v3는 "옛 유사도-점수 기준 0.85를 RRF에 그대로 쓰면 다 잘린다"는 이유로 0으로 껐는데,
+    // 그 뒤 순위 기반 RRF에서는 이 값이 오히려 **가장 쓸모 있는 손잡이**가 됐다. 실측(RRF_K=60):
+    //   양쪽 엔진이 동의한 엔트리 → 1등 대비 0.92~1.00
+    //   BM25에만 걸린 엔트리     → 0.32~0.48  (몇 위든 이 구간)
+    // 즉 0.6이면 "양쪽이 동의한 것"만 남고 BM25 단독 매칭은 걸러진다.
+    // BM25는 단어 하나만 겹쳐도 통과라, 이게 없으면 maxK가 유일한 필터가 되어
+    // 관련 없는 턴에도 상한을 꽉 채운다(무관한 인물 로어가 딸려오는 원인).
+    // 벡터가 아예 못 뜬 턴(BM25 폴백)에는 전부 단독이라 이 컷이 자동으로 무력해진다 → 안전.
+    if (!_settings._cutoffV4) {
+        if (!(typeof _settings.vectorCutoffRatio === 'number' && _settings.vectorCutoffRatio > 0)) {
+            _settings.vectorCutoffRatio = 0.6;
+            console.log('[LivingLorebook] 상대 컷오프 0.6 적용 — BM25 단독 매칭 제외 (설정에서 조절 가능)');
+        }
+        _settings._cutoffV4 = true;
     }
 
     // '벡터만'(vector) 엔진 옵션 제거됨 — 저장값이 무엇이든 무조건 정규화.

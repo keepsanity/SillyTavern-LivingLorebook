@@ -16,7 +16,7 @@ import { renderSelectionLorebookList, populateTargetLorebookDropdown, populateAd
 import { refreshVectorStatus } from './ui-settings.js';
 import { createPanel, openPanel, closePanel, togglePanel, refreshPanel, updateStatusBar, refreshInjectChip } from './ui-panel.js';
 import { handleBuildWorld, handleOrganize, handleCompress } from './ui-toolbar.js';
-import { selectEntries, clearSelectionCache, autoReindexStaleLorebooks } from './summary-retrieval.js';
+import { selectEntries, clearSelectionCache, autoReindexStaleLorebooks, injectManagedEntriesIntoWI } from './summary-retrieval.js';
 
 // ============================================================
 // Constants
@@ -366,6 +366,10 @@ function registerEventListeners() {
     });
 
     // Generation hook — WI 처리 전에 우리 주입 슬롯 채움 (캐시 적중이면 즉시)
+    // ST가 WI 후보 목록을 만들 때, managed 로어북 엔트리를 그 목록에 끼워 넣는다.
+    // (이게 없으면 ST가 LL 로어북을 아예 순회하지 않아 force-activate가 전부 무시됨)
+    eventSource.on(event_types.WORLDINFO_ENTRIES_LOADED, injectManagedEntriesIntoWI);
+
     eventSource.on(event_types.GENERATION_AFTER_COMMANDS, onGenerationBeforeWI);
 
     // 메시지 수신 시 미처리 카운트 업데이트
