@@ -2,7 +2,7 @@
  * Lore Store — 설정 관리, 로어북 CRUD 래퍼, 티어 메타데이터
  */
 
-import { saveSettingsDebounced } from '../../../../script.js';
+import { saveSettingsDebounced, chat_metadata } from '../../../../script.js';
 import {
     loadWorldInfo,
     createWorldInfoEntry,
@@ -370,6 +370,9 @@ export function initStore(context) {
 }
 
 export function getSettings() {
+    // 미러(targetLorebook/selectionLorebooks)를 chat_metadata 원본과 맞춘 뒤 넘긴다.
+    // 읽기·쓰기 경로가 전부 여기를 거치므로, 복원 타이밍이 어긋나도 stale 값을 볼 일이 없다.
+    if (_settings) readChatScope();   // init 전에는 아직 맞출 미러가 없다
     return _settings;
 }
 
@@ -421,16 +424,83 @@ export function isLorebookValid(name) {
     return names.includes(name);
 }
 
+// 채팅별 LL 상태를 담는 chat_metadata 키 (chat-meta.js가 이 상수를 재-export한다)
+export const LL_TARGET_KEY = 'll_target_lorebook';
+export const LL_SELECTION_KEY = 'll_selection_lorebooks';
+
+/**
+ * 현재 채팅의 (target, extras)를 **chat_metadata에서 직접** 읽는다.
+ *
+ * ⚠️ _settings.targetLorebook / selectionLorebooks 는 chat_metadata의 **미러**일 뿐이다.
+ * restoreChatMetadata()는 CHAT_CHANGED에서 미러를 갱신하는데, ST가 채팅을 채우기 전에
+ * 이벤트가 튀면(모바일 재진입 등) 빈 chat_metadata를 보고 복원을 건너뛴다 → 미러가
+ * 이전 채팅 값(또는 빈 값)으로 남고, 그 뒤엔 아무도 다시 갱신해주지 않는다.
+ * 그 결과 "로어북 카드는 2개 managed ON인데(카드는 chat_metadata를 봄) 엔진은 0개/1개만
+ * 읽는다"는 불일치가 생긴다. 그래서 읽기는 항상 원본을 본다.
+ *
+ * chat_metadata가 빈 객체면 아직 로드 전 → 미러로 폴백 (restore의 가드와 같은 판단).
+ * @returns {{target: string, extras: string[]}}
+ */
+let _scopeCacheRaw = null;   // [targetRaw, selectionRaw] — 값이 그대로면 재파싱/재비교 생략
+let _scopeCacheVal = null;
+
+function readChatScope() {
+    const cm = chat_metadata;
+    const hasLL = !!cm && typeof cm === 'object'
+        && (cm[LL_TARGET_KEY] !== undefined || cm[LL_SELECTION_KEY] !== undefined);
+
+    // 이 채팅에 LL 키가 하나도 없으면 = 아직 저장 안 됨(로드 전이거나 saveMetadata가 못 붙음).
+    // **절대 미러를 지우지 않는다** — 지우면 멀쩡히 쓰던 로어북이 통째로 사라진다.
+    // 전역 미러를 기본값으로 계속 쓰고, 채팅에 값이 생기면 그 순간부터 채팅 쪽이 이긴다.
+    if (!hasLL) {
+        _scopeCacheRaw = null;
+        return {
+            target: _settings.targetLorebook || '',
+            extras: Array.isArray(_settings.selectionLorebooks) ? _settings.selectionLorebooks : [],
+        };
+    }
+
+    const raw = cm[LL_SELECTION_KEY];
+    const targetRaw = cm[LL_TARGET_KEY];
+    // getSettings()가 렌더마다 수십 번 호출되므로 값이 안 바뀌었으면 즉시 반환
+    if (_scopeCacheRaw && _scopeCacheRaw[0] === targetRaw && _scopeCacheRaw[1] === raw) {
+        return _scopeCacheVal;
+    }
+
+    const target = targetRaw || '';
+    let extras = [];
+    if (typeof raw === 'string' && raw.length > 0) {
+        try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) extras = parsed.filter(n => typeof n === 'string' && n.length > 0);
+        } catch { /* 깨진 값은 없는 것으로 */ }
+    } else if (Array.isArray(raw)) {
+        extras = raw.filter(n => typeof n === 'string' && n.length > 0);
+    }
+
+    // 미러 자가치유 — isManagedMode(target 비교)·UI·저장 경로가 같은 값을 보게 한다.
+    // (여기선 저장 안 함: 원본은 chat_metadata이고 미러는 파생값일 뿐)
+    if (_settings.targetLorebook !== target) _settings.targetLorebook = target;
+    const cur = Array.isArray(_settings.selectionLorebooks) ? _settings.selectionLorebooks : null;
+    if (!cur || cur.length !== extras.length || cur.some((n, i) => n !== extras[i])) {
+        _settings.selectionLorebooks = extras;
+    }
+
+    _scopeCacheRaw = [targetRaw, raw];
+    _scopeCacheVal = { target, extras };
+    return _scopeCacheVal;
+}
+
 /**
  * 현재 채팅에서 AI 선택이 후보로 삼을 로어북들의 effective list.
  * targetLorebook 자동 포함 + selectionLorebooks의 유효한 항목만.
  * @returns {string[]}
  */
 export function getEffectiveSelectionLorebooks() {
+    const { target, extras } = readChatScope();
     const set = new Set();
-    if (_settings.targetLorebook) set.add(_settings.targetLorebook);
-    const extra = Array.isArray(_settings.selectionLorebooks) ? _settings.selectionLorebooks : [];
-    for (const name of extra) {
+    if (target) set.add(target);
+    for (const name of extras) {
         if (name) set.add(name);
     }
     return Array.from(set).filter(isLorebookValid);

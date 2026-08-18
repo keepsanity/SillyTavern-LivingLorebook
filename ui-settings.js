@@ -6,6 +6,7 @@
  */
 
 import { chat_metadata } from '../../../../script.js';
+import { world_names } from '../../../world-info.js';
 import { refreshPanel } from './ui-shared.js';
 import {
     getSettings, saveSettings, DEFAULT_SETTINGS,
@@ -14,7 +15,7 @@ import {
 import { clearSelectionCache, reindexManagedLorebooks } from './summary-retrieval.js';
 import { backfillSummaries } from './memory-manager.js';
 import { getVectorSourceInfo } from './vector-service.js';
-import { LL_SELECTION_KEY, setChatLorebook, getChatSelectionLorebooks, setChatSelectionLorebooks } from './chat-meta.js';
+import { LL_TARGET_KEY, LL_SELECTION_KEY, setChatLorebook, getChatSelectionLorebooks, setChatSelectionLorebooks } from './chat-meta.js';
 import { renderSelectionLorebookList, populateTargetLorebookDropdown, populateAddLorebookDropdown } from './ui-lorebooks.js';
 
 const LOG_PREFIX = '[LivingLorebook]';
@@ -233,8 +234,27 @@ export function bindSettingsInputs(panel) {
 
         // managed 로어북이 하나도 없으면 인덱스 상태를 따질 것도 없다 —
         // LL은 managed 로어북만 읽으므로 선택도 재색인도 대상이 0개다.
-        const managedCount = getEffectiveSelectionLorebooks().filter(name => isManagedMode(name)).length;
+        const effective = getEffectiveSelectionLorebooks();
+        const managedCount = effective.filter(name => isManagedMode(name)).length;
         if (managedCount === 0) {
+            // 왜 0인지 콘솔에 그대로 — "카드는 ON인데 여긴 0개" 같은 불일치를 눈으로 확인 가능
+            const cmTarget = chat_metadata?.[LL_TARGET_KEY];
+            const cmSel = chat_metadata?.[LL_SELECTION_KEY];
+            const claimed = [];
+            if (cmTarget) claimed.push(cmTarget);
+            try { const p = JSON.parse(cmSel || '[]'); if (Array.isArray(p)) claimed.push(...p); } catch { /* noop */ }
+            console.warn(`${LOG_PREFIX} managed 0개 진단`, {
+                'chat_metadata 키 전체': chat_metadata ? Object.keys(chat_metadata) : null,
+                'chat_metadata.target': cmTarget,
+                'chat_metadata.selection': cmSel,
+                'settings.targetLorebook': settings.targetLorebook,
+                'settings.selectionLorebooks': settings.selectionLorebooks,
+                'effective(=유효성 통과)': effective,
+                'world_names에 없어서 탈락': claimed.filter(n => !(world_names || []).includes(n)),
+                'managed 아님': effective.filter(n => !isManagedMode(n)),
+                'perLorebookMigrated': settings.perLorebookMigrated,
+                'managedModeMigrated': settings.managedModeMigrated,
+            });
             el.innerHTML = `${label} · <span style="color:#f87171;">managed 로어북 0개 — LL이 읽을 대상이 없습니다. 위에서 <b>managed 전환</b>을 눌러주세요</span>`;
             return;
         }

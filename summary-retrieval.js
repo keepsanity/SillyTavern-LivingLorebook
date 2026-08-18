@@ -770,6 +770,13 @@ async function _vectorRanks(candidates, queryText, settings, lorebooks) {
  * @param {string[]} lorebooks - managed 로어북 이름들
  * @param {'hybrid'|'vector'|'bm25'} engine
  */
+/** 로어북별 채택 수 — "왜 메인 로어북만 들어가지?"를 로그만 보고 판단할 수 있게. */
+function perBookLabel(entries, lorebooks) {
+    const count = new Map(lorebooks.map(lb => [lb, 0]));
+    for (const e of entries) count.set(e.lorebookName, (count.get(e.lorebookName) || 0) + 1);
+    return [...count.entries()].map(([lb, n]) => `${lb} ${n}`).join(' · ');
+}
+
 async function _selectFast(candidates, queries, settings, lorebooks, engine) {
     const maxK = settings.vectorSelectMaxK || 12;
     // 0이면 컷오프 끔(기본) — RRF 점수는 순위 기반이라 절대 유사도처럼 해석되지 않음.
@@ -870,7 +877,7 @@ async function _selectFast(candidates, queries, settings, lorebooks, engine) {
         `(vector ${vRanks.size}${vecThreshold != null ? `@${vecThreshold}` : ''}, bm25 ${bRanks.size}, ` +
         `양쪽 ${both}, maxK ${maxK}${ratio > 0 ? `, ratio ${ratio}` : ''}) ` +
         `vec ${vecMs.toFixed(0)}ms/${queries.vector.length}자 · bm25 ${bmMs.toFixed(0)}ms/${queries.bm25.length}자, ` +
-        `${lorebooks.length} lorebook${lorebooks.length > 1 ? 's' : ''}`,
+        `[${perBookLabel(entries, lorebooks)}]`,
     );
     return { entries, fromCache: false, stage: `${label} (${entries.length}/${scored.length})` };
 }
