@@ -7,10 +7,10 @@
 
 import { chat_metadata } from '../../../../script.js';
 import { world_names } from '../../../world-info.js';
-import { refreshPanel } from './ui-shared.js';
+import { refreshPanel, escapeHtml } from './ui-shared.js';
 import {
     getSettings, saveSettings, DEFAULT_SETTINGS,
-    getEffectiveSelectionLorebooks, isManagedMode,
+    getEffectiveSelectionLorebooks, isManagedMode, describeChatScope,
 } from './lore-store.js';
 import { clearSelectionCache, reindexManagedLorebooks } from './summary-retrieval.js';
 import { backfillSummaries } from './memory-manager.js';
@@ -225,6 +225,9 @@ export function bindSettingsInputs(panel) {
     /** 현재 임베딩 소스 + 인덱스 시그니처 일치 여부를 패널에 표시 */
     function refreshVectorSourceStatus() {
         refreshConflictWarning();
+        // 카드 리스트도 같이 다시 그린다. 예전엔 카드는 옛 chat_metadata, 상태줄은 새 chat_metadata를
+        // 보여줘서 "카드엔 2개 managed ON인데 상태줄은 0개"라는 모순이 났다. 같은 시점을 보게 강제.
+        renderSelectionLorebookList(panel);
         const el = panel.querySelector('#ll_s_vector_source');
         if (!el) return;
         const { source, model } = getVectorSourceInfo();
@@ -237,25 +240,53 @@ export function bindSettingsInputs(panel) {
         const effective = getEffectiveSelectionLorebooks();
         const managedCount = effective.filter(name => isManagedMode(name)).length;
         if (managedCount === 0) {
-            // 왜 0인지 콘솔에 그대로 — "카드는 ON인데 여긴 0개" 같은 불일치를 눈으로 확인 가능
+            // 0개인 이유를 **화면에 그대로** 찍는다. 카드 리스트는 chat_metadata를 직접 읽고
+            // 여기는 getEffectiveSelectionLorebooks()를 쓰는데, 둘이 어긋나면 추측할 방법이 없었다.
             const cmTarget = chat_metadata?.[LL_TARGET_KEY];
             const cmSel = chat_metadata?.[LL_SELECTION_KEY];
             const claimed = [];
-            if (cmTarget) claimed.push(cmTarget);
-            try { const p = JSON.parse(cmSel || '[]'); if (Array.isArray(p)) claimed.push(...p); } catch { /* noop */ }
-            console.warn(`${LOG_PREFIX} managed 0개 진단`, {
+            if (typeof cmTarget === 'string' && cmTarget) claimed.push(cmTarget);
+            try {
+                const parsed = JSON.parse(cmSel || '[]');
+                if (Array.isArray(parsed)) claimed.push(...parsed);
+            } catch { /* 깨진 값 */ }
+            const names = world_names || [];
+            const invalid = claimed.filter(n => !names.includes(n));
+            const notManaged = effective.filter(n => !isManagedMode(n));
+
+            const scope = describeChatScope();
+            const dump = {
+                '스코프 출처': scope,
                 'chat_metadata 키 전체': chat_metadata ? Object.keys(chat_metadata) : null,
                 'chat_metadata.target': cmTarget,
                 'chat_metadata.selection': cmSel,
                 'settings.targetLorebook': settings.targetLorebook,
                 'settings.selectionLorebooks': settings.selectionLorebooks,
+                'chat_metadata가 주장하는 로어북': claimed,
                 'effective(=유효성 통과)': effective,
-                'world_names에 없어서 탈락': claimed.filter(n => !(world_names || []).includes(n)),
-                'managed 아님': effective.filter(n => !isManagedMode(n)),
+                'world_names 개수': names.length,
+                'world_names에 없어서 탈락': invalid,
+                'managed 아님': notManaged,
                 'perLorebookMigrated': settings.perLorebookMigrated,
-                'managedModeMigrated': settings.managedModeMigrated,
-            });
-            el.innerHTML = `${label} · <span style="color:#f87171;">managed 로어북 0개 — LL이 읽을 대상이 없습니다. 위에서 <b>managed 전환</b>을 눌러주세요</span>`;
+            };
+            console.warn(`${LOG_PREFIX} managed 0개 진단`, dump);
+
+            // 화면 문구 — 원인별로 갈라서 **구체적으로**
+            let why;
+            if (!scope.chatId) {
+                // ST에 열린 채팅이 없다 (this_chid undefined). 로어북이 없는 게 당연하다.
+                why = `<b>열린 채팅이 없습니다.</b> 채팅을 열면 그 채팅의 로어북을 읽습니다`;
+            } else if (claimed.length === 0) {
+                why = `<b>이 채팅에 지정된 로어북이 없습니다.</b> 위 <b>선택 소스 로어북</b>에서 target을 고르세요 (로어북은 <u>채팅마다 따로</u> 기억됩니다)`;
+            } else if (invalid.length > 0) {
+                // 이름은 있는데 ST의 로어북 목록에 없음 — 유니코드 표기 차이(NFC/NFD)나 이름 변경
+                why = `<b>이름이 ST 로어북 목록과 안 맞습니다</b> — ${invalid.map(n => `"${escapeHtml(n)}"`).join(', ')} (world_names ${names.length}개 중 없음). 로어북을 <b>다시 선택</b>해주세요`;
+            } else if (notManaged.length > 0) {
+                why = `로어북 ${notManaged.length}개가 <b>managed가 아닙니다</b> (${escapeHtml(notManaged.join(', '))}) — 카드의 <b>managed 전환</b>을 눌러주세요`;
+            } else {
+                why = `원인 불명 — chat_metadata=[${claimed.map(escapeHtml).join(', ')}] / effective=[${effective.map(escapeHtml).join(', ')}]. 콘솔의 <b>managed 0개 진단</b>을 확인해주세요`;
+            }
+            el.innerHTML = `${label} · <span style="color:#f87171;">${why}</span>`;
             return;
         }
 

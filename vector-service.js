@@ -263,7 +263,7 @@ export async function deleteEntries(collectionId, hashes) {
 /**
  * 컬렉션 전체 삭제
  */
-export async function purgeCollection(collectionId) {
+async function purgeCollection(collectionId) {
     const response = await fetch('/api/vector/purge', {
         method: 'POST',
         headers: getRequestHeaders(),

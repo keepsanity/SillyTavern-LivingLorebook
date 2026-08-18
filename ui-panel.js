@@ -9,15 +9,16 @@ import { characters, this_chid } from '../../../../script.js';
 import { world_names, createNewWorldInfo } from '../../../world-info.js';
 import { CATEGORIES, escapeHtml, escapeAttr, registerRefreshPanel, populateLorebookDropdown } from './ui-shared.js';
 import {
-    getSettings, loadTargetLorebook, getMetadata,
+    getSettings, loadTargetLorebook, getMetadata, CATEGORY_TAGS,
     calculateSelectionStorage, getEffectiveSelectionLorebooks,
 } from './lore-store.js';
 import { getLastInjectionStats } from './summary-retrieval.js';
+import { refreshVectorStatus } from './ui-settings.js';
 import { setChatLorebook } from './chat-meta.js';
 import { PANEL_HTML } from './ui-panel-template.js';
 import { bindSettingsInputs } from './ui-settings.js';
 import { handleToolbarAction } from './ui-toolbar.js';
-import { renderSelectionLorebookList, populateTargetLorebookDropdown, populateAddLorebookDropdown } from './ui-lorebooks.js';
+import { populateTargetLorebookDropdown, populateAddLorebookDropdown } from './ui-lorebooks.js';
 import { openInlineEditor, handleEntryHideToggle, handleEntryLiveToggle, handleEntryPinToggle, handleEntryDelete } from './ui-entry.js';
 
 const LOG_PREFIX = '[LivingLorebook]';
@@ -133,12 +134,16 @@ function switchView(view) {
         toolbar.style.display = 'none';
         settingsView.classList.add('active');
         settingsBtn.className = 'fa-solid fa-arrow-left';
-        // 매 settings view 진입 시 카드 리스트 + dropdown 강제 재렌더 (stale 방지)
+        // 매 settings view 진입 시 전부 재렌더 (stale 방지).
+        // ⚠️ 상태줄(refreshVectorStatus)도 반드시 같이 — 안 그러면 페이지 로드 직후
+        // (채팅 복원 전, getCurrentChatId()=undefined)에 그려진 "열린 채팅 없음" 텍스트가
+        // 남아서, 카드는 현재 채팅인데 상태줄은 옛 시점인 모순 화면이 된다.
+        // (refreshVectorStatus가 내부에서 카드 리스트도 다시 그린다)
         const panel = document.querySelector('.ll-panel');
         if (panel) {
-            renderSelectionLorebookList(panel);
             populateAddLorebookDropdown(panel);
             populateTargetLorebookDropdown(panel);
+            refreshVectorStatus();
         }
     } else {
         timeline.style.display = '';
@@ -244,24 +249,19 @@ async function renderTimeline() {
         grouped[cat] = [];
     }
 
-    // content의 XML 태그에서 카테고리 역추적
-    const TAG_TO_CATEGORY = {
-        story_arc: 'arc',
-        character_info: 'character',
-        relationship_info: 'relationship',
-        location_info: 'location',
-        event_log: 'event',
-        routine_info: 'routine',
-        item_info: 'item',
-        world_setting: 'fact',
-    };
+    // content의 XML 태그에서 카테고리 역추적 — 태그 이름의 원본은 lore-store.CATEGORY_TAGS.
+    // (여기에 따로 적어두면 카테고리를 추가할 때 한쪽만 고치는 사고가 난다)
+    const TAG_TO_CATEGORY = Object.fromEntries(
+        Object.entries(CATEGORY_TAGS).map(([cat, tag]) => [tag, cat]),
+    );
+    const TAG_RE = new RegExp(`<(${Object.values(CATEGORY_TAGS).join('|')})>`);
 
     for (const [uid, entry] of Object.entries(data.entries)) {
         const meta = getMetadata(uid, settings.targetLorebook);
         // content 태그에서 카테고리 우선 판별 (로어북 간 uid 충돌 방지)
         let category = meta?.category || 'fact';
         const content = entry.content || '';
-        const tagMatch = content.match(/<(story_arc|character_info|relationship_info|location_info|event_log|routine_info|item_info|world_setting)>/);
+        const tagMatch = content.match(TAG_RE);
         if (tagMatch) {
             category = TAG_TO_CATEGORY[tagMatch[1]];
         }

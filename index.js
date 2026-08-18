@@ -275,6 +275,13 @@ const INJECTION_KEY = 'LivingLorebook_selection';
  * fire-and-forget — 실패해도 generation 막지 않음.
  */
 let _precomputeInflight = false;
+
+/**
+ * 이번 generation에서 켜야 할 엔트리 — GENERATION_AFTER_COMMANDS에서 계산해두고,
+ * 실제 emit은 WORLDINFO_ENTRIES_LOADED에서 한다. (R1: dry-run 리셋 방어 — 아래 참고)
+ * @type {Array<object>|null}
+ */
+let _pendingActivation = null;
 function precomputeSelection(source) {
     if (_precomputeInflight) return; // 중복 호출 방지
     if (!settings.enabled || !settings.summarySelectionEnabled) return;
@@ -307,6 +314,7 @@ async function onGenerationBeforeWI(type, options, dryRun) {
     if (options?.skipWIAN) return;
 
     const t0 = performance.now();
+    _pendingActivation = null;   // 이전 턴 잔여가 이번 WI 조립에 섞이지 않게
     try {
         const chat = context.chat || [];
         // selectEntries 자체가 managed mode 아닌 lorebook은 후보에서 제외함 — 이중주입 안전
@@ -328,16 +336,46 @@ async function onGenerationBeforeWI(type, options, dryRun) {
                 uid: raw.uid !== undefined ? raw.uid : (Number.isFinite(Number(e.uid)) ? Number(e.uid) : e.uid),
             };
         });
-        await context.eventSource.emit(event_types.WORLDINFO_FORCE_ACTIVATE, entriesToActivate);
+        // 여기서 바로 emit하지 않는다 — ST는 checkWorldInfo가 끝날 때마다
+        // buffer.resetExternalEffects()로 외부 활성화를 통째로 지우는데, **dry run에서도** 지운다.
+        // 다른 확장이 진짜 생성 사이에 dry-run generate를 끼우면 여기서 켜둔 게 날아간다.
+        // → 활성화 루프 바로 앞(WORLDINFO_ENTRIES_LOADED)에서 emit하면 지워질 창이 없다.
+        _pendingActivation = entriesToActivate;
 
         const cacheTag = result.fromCache ? ' [CACHED]' : '';
-        console.log(`${LOG_PREFIX} Force-activated ${entriesToActivate.length} entries in ${dt}ms${cacheTag} (${result.stage})`);
+        console.log(`${LOG_PREFIX} Selected ${entriesToActivate.length} entries in ${dt}ms${cacheTag} (${result.stage}) — WI 조립 시 활성화`);
 
         // 주입 칩 즉시 갱신
         try { refreshInjectChip(); } catch { /* ignore */ }
     } catch (err) {
         console.error(`${LOG_PREFIX} Selection injection failed:`, err);
     }
+}
+
+/**
+ * ST가 WI 후보 목록을 조립하는 순간(getSortedEntries 안)에 호출된다.
+ * 1) managed 로어북 엔트리를 후보 목록에 끼워 넣고
+ * 2) 이번 턴에 고른 엔트리를 force-activate 한다.
+ *
+ * 2번을 여기서 하는 이유(R1): ST는 checkWorldInfo가 끝날 때 resetExternalEffects()로
+ * 외부 활성화를 전부 지운다 — dry run에서도. 예전처럼 GENERATION_AFTER_COMMANDS에서 켜두면
+ * 켠 시점과 쓰이는 시점 사이가 프롬프트 조립 전체라, 그 사이에 낀 dry-run 한 번에 통째로
+ * 날아갔다. 여기는 활성화 루프 **바로 앞**(같은 getSortedEntries 안)이라 그 창이 사라진다.
+ */
+async function onWorldInfoEntriesLoaded(lore) {
+    await injectManagedEntriesIntoWI(lore);
+
+    if (!_pendingActivation || _pendingActivation.length === 0) return;
+
+    // **1회 소비**. getSortedEntries()는 여기 말고도 두 군데서 더 불린다 —
+    // 채팅 전환 시 ST의 WI 프리캐시(world-info.js CHAT_CHANGED)와 Vector Storage 확장.
+    // 보관분을 남겨두면 그 호출들이 이전 턴에 고른 엔트리를 다시 켜버리고,
+    // 두 채팅이 같은 로어북을 공유하면 엉뚱한 엔트리가 실제로 주입된다.
+    const entries = _pendingActivation;
+    _pendingActivation = null;
+
+    await context.eventSource.emit(event_types.WORLDINFO_FORCE_ACTIVATE, entries);
+    console.log(`${LOG_PREFIX} Force-activated ${entries.length} entries (WI 조립 시점)`);
 }
 
 function registerEventListeners() {
@@ -347,6 +385,7 @@ function registerEventListeners() {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         // 채팅별 LL 메타데이터 복원 (target + selection)
         restoreChatMetadata();
+        _pendingActivation = null;   // 이전 채팅에서 고른 엔트리가 새 채팅에 켜지지 않게
         $('#ll_target_lorebook').val(settings.targetLorebook || '');
 
         updateStatusBar();
@@ -368,9 +407,10 @@ function registerEventListeners() {
     // Generation hook — WI 처리 전에 우리 주입 슬롯 채움 (캐시 적중이면 즉시)
     // ST가 WI 후보 목록을 만들 때, managed 로어북 엔트리를 그 목록에 끼워 넣는다.
     // (이게 없으면 ST가 LL 로어북을 아예 순회하지 않아 force-activate가 전부 무시됨)
-    eventSource.on(event_types.WORLDINFO_ENTRIES_LOADED, injectManagedEntriesIntoWI);
+    eventSource.on(event_types.WORLDINFO_ENTRIES_LOADED, onWorldInfoEntriesLoaded);
 
     eventSource.on(event_types.GENERATION_AFTER_COMMANDS, onGenerationBeforeWI);
+
 
     // 메시지 수신 시 미처리 카운트 업데이트
     // (precompute는 MESSAGE_SENT만 사용 — MESSAGE_RECEIVED는 같은 캐시 키라 중복 호출)

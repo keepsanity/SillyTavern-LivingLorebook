@@ -2,7 +2,7 @@
  * Lore Store — 설정 관리, 로어북 CRUD 래퍼, 티어 메타데이터
  */
 
-import { saveSettingsDebounced, chat_metadata } from '../../../../script.js';
+import { saveSettingsDebounced, chat_metadata, getCurrentChatId } from '../../../../script.js';
 import {
     loadWorldInfo,
     createWorldInfoEntry,
@@ -57,8 +57,6 @@ export const DEFAULT_SETTINGS = {
     selectionLorebooks: [],
 
     // 티어 설정
-    tier2MessageAge: 50,
-    tier3MessageAge: 150,
     tier2TargetRatio: 50,
     tier3TargetRatio: 20,
 
@@ -104,16 +102,13 @@ export const DEFAULT_SETTINGS = {
     // BM25는 단어 하나만 겹쳐도 score>0이라, 없으면 maxK가 유일한 필터가 되어 매 턴 상한을 꽉 채운다.
     bm25MinScoreRatio: 0.35,
     // (deprecated) vectorPrefilter* — vector hash 매칭 불안정으로 BM25로 교체됨
-    vectorPrefilterEnabled: false,
-    vectorPrefilterK: 30,
     selectionScanDepth: 8,             // AI 선택용 채팅 컨텍스트 길이
     selectionCacheEnabled: true,       // 같은 채팅+manifest면 결과 재사용
-    selectionInjectionDepth: 4,        // setExtensionPrompt 깊이
-    selectionInjectionRole: 0,         // 0=system, 1=user, 2=assistant
     selectionTimeoutMs: 120000,        // AI 선택 호출 timeout (2분) — 거의 무제한. LLM 자체가 hang이면 메인도 같이 hang하니까 LL만 짧게 자르는 의미 없음
     debugSelectionResponse: true,      // AI 선택 raw 응답을 콘솔에 출력 (진단용 — 안정되면 끄기)
     managedModeMigrated: false,        // (deprecated, targetLorebook의 perLorebookMigrated와 동기) 호환 유지
     perLorebookMigrated: {},           // { [lorebookName]: boolean } — 로어북별 managed 상태
+    scopeByChat: {},                   // { [chatId]: {t:target, e:extras} } — 채팅별 로어북 기억(폴백용)
 
     // 상태 추적
     lastOrganizeMessageIndex: 0,
@@ -288,7 +283,9 @@ export function initStore(context) {
     // Schema migration
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
         if (_settings[key] === undefined) {
-            _settings[key] = DEFAULT_SETTINGS[key];
+            // 객체/배열 기본값은 반드시 복사 — 참조를 그대로 넣으면 이후의 모든 수정이
+            // DEFAULT_SETTINGS 원본에 쌓인다 (scopeByChat, perLorebookMigrated 등).
+            _settings[key] = structuredClone(DEFAULT_SETTINGS[key]);
         }
     }
 
@@ -352,6 +349,18 @@ export function initStore(context) {
     // BM25는 단어 하나만 겹쳐도 통과라, 이게 없으면 maxK가 유일한 필터가 되어
     // 관련 없는 턴에도 상한을 꽉 채운다(무관한 인물 로어가 딸려오는 원인).
     // 벡터가 아예 못 뜬 턴(BM25 폴백)에는 전부 단독이라 이 컷이 자동으로 무력해진다 → 안전.
+    // 죽은 설정 청소 (v5) — 아무 코드도 안 읽는 키가 settings.json에 남아 혼란만 준다
+    if (!_settings._deadKeysV5) {
+        const dead = ['selectionInjectionDepth', 'selectionInjectionRole', 'tier2MessageAge',
+            'tier3MessageAge', 'vectorPrefilterEnabled', 'vectorPrefilterK', 'lastScopeChatId'];
+        const removed = dead.filter(k => k in _settings);
+        for (const k of removed) delete _settings[k];
+        if (removed.length > 0) {
+            console.log(`[LivingLorebook] 안 쓰는 설정 ${removed.length}개 제거: ${removed.join(', ')}`);
+        }
+        _settings._deadKeysV5 = true;
+    }
+
     if (!_settings._cutoffV4) {
         if (!(typeof _settings.vectorCutoffRatio === 'number' && _settings.vectorCutoffRatio > 0)) {
             _settings.vectorCutoffRatio = 0.6;
@@ -405,7 +414,7 @@ export function setMetadata(uid, data, lorebookName) {
     saveSettings();
 }
 
-export function deleteMetadata(uid, lorebookName) {
+function deleteMetadata(uid, lorebookName) {
     const key = makeMetaKey(uid, lorebookName);
     delete _settings.entryMetadata[key];
     saveSettings();
@@ -418,7 +427,7 @@ export function deleteMetadata(uid, lorebookName) {
 /**
  * 대상 로어북이 실제로 존재하는지 확인
  */
-export function isLorebookValid(name) {
+function isLorebookValid(name) {
     if (!name) return false;
     const names = world_names || [];
     return names.includes(name);
@@ -429,66 +438,131 @@ export const LL_TARGET_KEY = 'll_target_lorebook';
 export const LL_SELECTION_KEY = 'll_selection_lorebooks';
 
 /**
- * 현재 채팅의 (target, extras)를 **chat_metadata에서 직접** 읽는다.
+ * 현재 채팅의 (target, extras)를 읽는다.
  *
- * ⚠️ _settings.targetLorebook / selectionLorebooks 는 chat_metadata의 **미러**일 뿐이다.
- * restoreChatMetadata()는 CHAT_CHANGED에서 미러를 갱신하는데, ST가 채팅을 채우기 전에
- * 이벤트가 튀면(모바일 재진입 등) 빈 chat_metadata를 보고 복원을 건너뛴다 → 미러가
- * 이전 채팅 값(또는 빈 값)으로 남고, 그 뒤엔 아무도 다시 갱신해주지 않는다.
- * 그 결과 "로어북 카드는 2개 managed ON인데(카드는 chat_metadata를 봄) 엔진은 0개/1개만
- * 읽는다"는 불일치가 생긴다. 그래서 읽기는 항상 원본을 본다.
+ * ## 사실관계 (세 번 데이고 확정)
+ * - 원본은 `chat_metadata`지만, **런타임에 LL 키가 없는 순간이 흔하다.** 채팅 파일 헤더엔
+ *   멀쩡히 있는데도 그렇다 (ST가 로드 중 객체를 갈아끼움).
+ * - `getCurrentChatId()`는 채팅이 안 열렸거나 로드 전이면 `undefined`를 준다.
  *
- * chat_metadata가 빈 객체면 아직 로드 전 → 미러로 폴백 (restore의 가드와 같은 판단).
+ * ## 규칙
+ * 폴백은 **채팅별로** 기억한다 (`settings.scopeByChat[chatId]`).
+ * 전역 한 칸(미러)으로 폴백하면 로딩 중에 **직전 채팅 로어북이 튀어나온다** — 실제로 그랬다.
+ *
+ *   1. chat_metadata에 LL 키 있음      → 그게 진짜. scopeByChat[chatId]에도 기록.
+ *   2. 없는데 scopeByChat[chatId] 있음 → 이 채팅이 예전에 쓰던 값 (아직 안 붙었을 뿐)
+ *   3. 그 외 (다른 채팅 / 채팅 없음)   → **빈 목록**. 절대 남의 값을 빌려오지 않는다.
+ *
+ * `_settings.targetLorebook` / `selectionLorebooks`는 이 함수가 맞춰주는 파생 캐시일 뿐이다
+ * (기존 20여 곳의 읽기/쓰기 경로 호환용). 판단 근거로 쓰지 말 것.
  * @returns {{target: string, extras: string[]}}
  */
-let _scopeCacheRaw = null;   // [targetRaw, selectionRaw] — 값이 그대로면 재파싱/재비교 생략
+let _scopeCacheRaw = null;   // [targetRaw, selectionRaw, chatId] — 그대로면 재파싱 생략
 let _scopeCacheVal = null;
+let _scopeSource = 'init';   // 마지막 읽기가 어디서 왔는지 (진단용)
+
+const SCOPE_HISTORY_MAX = 80;   // 채팅별 기억 상한 (오래된 것부터 버림)
+
+function getScopeMap() {
+    if (!_settings) return {};
+    if (!_settings.scopeByChat || typeof _settings.scopeByChat !== 'object') {
+        _settings.scopeByChat = {};
+    }
+    return _settings.scopeByChat;
+}
+
+function rememberScope(chatId, target, extras) {
+    if (!chatId || !_settings) return;
+    const map = getScopeMap();
+    const prev = map[chatId];
+    if (prev && prev.t === target && Array.isArray(prev.e)
+        && prev.e.length === extras.length && prev.e.every((n, i) => n === extras[i])) {
+        return;   // 변화 없음 — 저장 스팸 방지
+    }
+    delete map[chatId];                 // 삽입 순서를 최신으로 (아래 트림이 오래된 것부터 버리게)
+    map[chatId] = { t: target, e: extras };
+    const keys = Object.keys(map);
+    for (let i = 0; i < keys.length - SCOPE_HISTORY_MAX; i++) delete map[keys[i]];
+    saveSettingsDebounced();
+}
 
 function readChatScope() {
     const cm = chat_metadata;
-    const hasLL = !!cm && typeof cm === 'object'
-        && (cm[LL_TARGET_KEY] !== undefined || cm[LL_SELECTION_KEY] !== undefined);
+    const targetRaw = (cm && typeof cm === 'object') ? cm[LL_TARGET_KEY] : undefined;
+    const raw = (cm && typeof cm === 'object') ? cm[LL_SELECTION_KEY] : undefined;
+    const chatId = getCurrentChatId() || null;
 
-    // 이 채팅에 LL 키가 하나도 없으면 = 아직 저장 안 됨(로드 전이거나 saveMetadata가 못 붙음).
-    // **절대 미러를 지우지 않는다** — 지우면 멀쩡히 쓰던 로어북이 통째로 사라진다.
-    // 전역 미러를 기본값으로 계속 쓰고, 채팅에 값이 생기면 그 순간부터 채팅 쪽이 이긴다.
-    if (!hasLL) {
-        _scopeCacheRaw = null;
-        return {
-            target: _settings.targetLorebook || '',
-            extras: Array.isArray(_settings.selectionLorebooks) ? _settings.selectionLorebooks : [],
-        };
-    }
-
-    const raw = cm[LL_SELECTION_KEY];
-    const targetRaw = cm[LL_TARGET_KEY];
     // getSettings()가 렌더마다 수십 번 호출되므로 값이 안 바뀌었으면 즉시 반환
-    if (_scopeCacheRaw && _scopeCacheRaw[0] === targetRaw && _scopeCacheRaw[1] === raw) {
+    if (_scopeCacheVal && _scopeCacheRaw
+        && _scopeCacheRaw[0] === targetRaw && _scopeCacheRaw[1] === raw && _scopeCacheRaw[2] === chatId) {
         return _scopeCacheVal;
     }
 
-    const target = targetRaw || '';
-    let extras = [];
-    if (typeof raw === 'string' && raw.length > 0) {
-        try {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed)) extras = parsed.filter(n => typeof n === 'string' && n.length > 0);
-        } catch { /* 깨진 값은 없는 것으로 */ }
-    } else if (Array.isArray(raw)) {
-        extras = raw.filter(n => typeof n === 'string' && n.length > 0);
+    let result;
+    if (targetRaw !== undefined || raw !== undefined) {
+        const target = typeof targetRaw === 'string' ? targetRaw : '';
+        let extras = [];
+        if (typeof raw === 'string' && raw.length > 0) {
+            try {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) extras = parsed.filter(n => typeof n === 'string' && n.length > 0);
+            } catch { /* 깨진 값은 없는 것으로 */ }
+        } else if (Array.isArray(raw)) {
+            extras = raw.filter(n => typeof n === 'string' && n.length > 0);
+        }
+        result = { target, extras };
+        rememberScope(chatId, target, extras);
+        _scopeSource = 'chat_metadata';
+    } else {
+        const saved = chatId ? getScopeMap()[chatId] : null;
+        if (saved) {
+            result = { target: saved.t || '', extras: Array.isArray(saved.e) ? saved.e : [] };
+            _scopeSource = 'scopeByChat (이 채팅이 쓰던 값)';
+        } else {
+            // 남의 채팅 값을 빌려오느니 비운다. 채팅 열면 1번 경로로 곧 채워진다.
+            result = { target: '', extras: [] };
+            _scopeSource = chatId ? 'empty (이 채팅 기록 없음)' : 'empty (열린 채팅 없음)';
+        }
     }
 
-    // 미러 자가치유 — isManagedMode(target 비교)·UI·저장 경로가 같은 값을 보게 한다.
-    // (여기선 저장 안 함: 원본은 chat_metadata이고 미러는 파생값일 뿐)
-    if (_settings.targetLorebook !== target) _settings.targetLorebook = target;
+    // 파생 캐시 동기화 (저장은 안 함 — 원본은 chat_metadata / scopeByChat)
+    if (_settings.targetLorebook !== result.target) _settings.targetLorebook = result.target;
     const cur = Array.isArray(_settings.selectionLorebooks) ? _settings.selectionLorebooks : null;
-    if (!cur || cur.length !== extras.length || cur.some((n, i) => n !== extras[i])) {
-        _settings.selectionLorebooks = extras;
+    if (!cur || cur.length !== result.extras.length || cur.some((n, i) => n !== result.extras[i])) {
+        _settings.selectionLorebooks = result.extras;
     }
 
-    _scopeCacheRaw = [targetRaw, raw];
-    _scopeCacheVal = { target, extras };
-    return _scopeCacheVal;
+    _scopeCacheRaw = [targetRaw, raw, chatId];
+    _scopeCacheVal = result;
+    return result;
+}
+
+/** chat_metadata를 직접 고친 뒤 다음 읽기가 반드시 재계산하도록 (chat-meta.js의 쓰기 경로에서 호출) */
+export function invalidateChatScope() {
+    _scopeCacheRaw = null;
+    _scopeCacheVal = null;
+}
+
+/** 사용자가 이 채팅의 로어북을 직접 골랐을 때 — 이 채팅 기록으로 남긴다 */
+export function stampChatScope(target, extras) {
+    const chatId = getCurrentChatId() || null;
+    rememberScope(chatId, target || '', Array.isArray(extras) ? extras : []);
+    invalidateChatScope();
+}
+
+/** 진단용 — 지금 스코프를 어디서 읽었는지 */
+export function describeChatScope() {
+    const cm = chat_metadata;
+    return {
+        source: _scopeSource,
+        chatId: getCurrentChatId() ?? null,
+        remembered: _settings?.scopeByChat?.[getCurrentChatId() || ''] ?? null,
+        cmTarget: (cm && typeof cm === 'object') ? cm[LL_TARGET_KEY] : undefined,
+        cmSelection: (cm && typeof cm === 'object') ? cm[LL_SELECTION_KEY] : undefined,
+        cmKeys: (cm && typeof cm === 'object') ? Object.keys(cm) : null,
+        mirrorTarget: _settings?.targetLorebook,
+        mirrorSelection: _settings?.selectionLorebooks,
+    };
 }
 
 /**
@@ -852,35 +926,3 @@ export async function calculateSelectionStorage() {
     return result;
 }
 
-/**
- * 로어북 티어별 통계 계산
- */
-export async function calculateTierStats(data) {
-    const stats = {
-        tier1: { count: 0, tokens: 0 },
-        tier2: { count: 0, tokens: 0 },
-        tier3: { count: 0, tokens: 0 },
-        total: { count: 0, tokens: 0 },
-    };
-
-    if (!data?.entries) return stats;
-
-    for (const [uid, entry] of Object.entries(data.entries)) {
-        if (entry.disable) continue;
-
-        const meta = getMetadata(uid);
-        const tier = meta?.tier || 1;
-        const tokens = await countTokens(entry.content || '');
-
-        const tierKey = `tier${tier}`;
-        if (stats[tierKey]) {
-            stats[tierKey].count++;
-            stats[tierKey].tokens += tokens;
-        }
-
-        stats.total.count++;
-        stats.total.tokens += tokens;
-    }
-
-    return stats;
-}
