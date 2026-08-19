@@ -1,5 +1,6 @@
 # Living Lorebook
-SillyTavern 확장. 로어북을 수동으로 관리하는 대신, **AI가 대화에서 기억을 정리하고 매 생성 직전 관련 로어만 골라 주입**합니다. Made mostly for personal use (_._)
+AI가 대화에서 기억을 정리하고 매 생성 직전 관련 로어만 골라 주입 
+Made mostly for personal use ₍ᐢっ ̫ ʚ̴̶̷̥̀ ᐢ₎
 
 ## 선택 엔진
 
@@ -21,7 +22,6 @@ Inspired By
 - [SillyTavern-MemoryBooks](https://github.com/aikohanasaki/SillyTavern-MemoryBooks)
 - [TunnelVision](https://github.com/Coneja-Chibi/TunnelVision)
 - [VectHare](https://github.com/Coneja-Chibi/VectHare)
-
 ---
 
 Copyright (C) 2026 keepsanity
