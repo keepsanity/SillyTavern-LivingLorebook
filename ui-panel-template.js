@@ -109,6 +109,11 @@ export const PANEL_HTML = `
                     <option value="delete">삭제 (완전 제거)</option>
                 </select>
             </div>
+            <div class="ll-settings-row">
+                <label>배치 크기</label>
+                <input class="ll-settings-input" id="ll_s_reorg_batch" type="number" min="3" max="40" />
+                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">한 번에 AI에 보낼 엔트리 수. 작을수록 유실 위험 ↓, LLM 호출 수 ↑ (권장 10~15)</span>
+            </div>
 
             <div class="ll-settings-section-title">
                 <i class="fa-solid fa-layer-group"></i> 압축 설정
@@ -243,6 +248,11 @@ export const PANEL_HTML = `
                     <label>주입 상한 (maxK)</label>
                     <input class="ll-settings-input" id="ll_s_vector_maxk" type="number" min="1" max="50" />
                     <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">최대 주입 개수 — "다 들어오는" 걸 막는 주 손잡이</span>
+                </div>
+                <div class="ll-settings-row ll-eng-fast">
+                    <label>키워드 직격</label>
+                    <input class="ll-settings-input" id="ll_s_keyword_match" type="checkbox" style="width:auto;" />
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">엔트리 키워드가 대화에 그대로 나오면 상대 컷오프에서 면제 (인물 이름이 안 걸릴 때 ON)</span>
                 </div>
                 <div class="ll-settings-row ll-eng-fast">
                     <label>상대 컷오프 비율</label>

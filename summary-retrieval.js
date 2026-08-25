@@ -437,11 +437,8 @@ async function _selectCore(chat) {
         try {
             const ranker = buildBM25(candidates, {
                 titleOf: c => c.title || '',
-                // title (가중치 ↑) + summary + keywords(meta) + content 첫 1500자
-                textOf: c => {
-                    const body = (c.content || '').slice(0, 1500);
-                    return `${c.title || ''} ${c.summary || ''} ${body}`;
-                },
+                // title (가중치 ↑) + summary + content 전체 (자르지 않음 — 위 _selectFast와 동일 이유)
+                textOf: c => `${c.title || ''} ${c.summary || ''} ${c.content || ''}`,
             });
             const ranked = ranker.search(chatText, prefilterK);
             bm25Ms = performance.now() - tBm;
@@ -662,7 +659,9 @@ let _sigWarned = null;
 function buildCandidateRanker(candidates) {
     return buildBM25(candidates, {
         titleOf: c => c.title || '',
-        textOf: c => `${c.title || ''} ${c.summary || ''} ${(c.content || '').slice(0, 1500)}`,
+        // 본문을 자르지 않는다. 실측상 컷 유무의 비용 차이가 오차 범위(101후보/13만자, 5~8ms)인데,
+        // 자르면 긴 사건 엔트리의 뒷부분이 통째로 검색에서 빠진다(이 로어북 기준 본문의 24%).
+        textOf: c => `${c.title || ''} ${c.summary || ''} ${c.content || ''}`,
     });
 }
 
@@ -770,6 +769,67 @@ async function _vectorRanks(candidates, queryText, settings, lorebooks) {
  * @param {string[]} lorebooks - managed 로어북 이름들
  * @param {'hybrid'|'vector'|'bm25'} engine
  */
+/**
+ * 엔트리 자신의 키워드가 대화에 **문자 그대로** 나오는지 검사.
+ *
+ * 왜 필요한가: managed 모드는 ST가 키워드로 자체 발동하지 못하게 `key`를 지우고 넘긴다.
+ * 그래서 "Sabrina" 같은 고유명사가 대화에 계속 나와도 ST는 못 켜고, LL의 하이브리드 점수는
+ * 상대 컷오프(양쪽 엔진 동의)에 걸려 잘려나간다 — BM25는 잡는데 벡터가 못 잡는 전형적 케이스.
+ * 이름이 그대로 찍혀 있으면 그건 가장 강한 신호다. 점수 경쟁에서 빼주고 자리를 보장한다.
+ *
+ * ST의 selective 시맨틱(보조 키워드 + selectiveLogic)을 그대로 따른다.
+ * @returns {Set<string>} 매칭된 candidate의 compositeKey
+ */
+function matchKeywordEntries(candidates, scanText) {
+    const hits = new Set();
+    if (!scanText) return hits;
+    const haystack = scanText.toLowerCase();
+
+    // `/pattern/flags` 형식은 정규식으로, 그 외는 리터럴로.
+    // 영문/숫자만인 키는 단어경계를 요구한다 ("River"가 "Rivers"에 걸리지 않게).
+    // 한글엔 단어경계 개념이 없으므로 부분일치 그대로 둔다.
+    const testKey = (key) => {
+        const k = String(key || '').trim();
+        if (k.length < 2) return false;   // 1글자 키는 오탐이 너무 많다
+
+        const re = k.match(/^\/(.+)\/([gimsuy]*)$/);
+        if (re) {
+            try { return new RegExp(re[1], re[2].replace('g', '')).test(scanText); } catch { return false; }
+        }
+
+        const lower = k.toLowerCase();
+        // 순수 ASCII 키는 단어경계를 요구 ("River"가 "Rivers"에 안 걸리게).
+        // 한글/CJK엔 단어경계 개념이 없으므로 부분일치 그대로.
+        if (!/[^ -]/.test(k)) {
+            try {
+                const esc = lower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                return new RegExp(`(^|[^\\w])${esc}([^\\w]|$)`, 'i').test(haystack);
+            } catch { return haystack.includes(lower); }
+        }
+        return haystack.includes(lower);
+    };
+
+    for (const c of candidates) {
+        const e = c.rawEntry || {};
+        const keys = Array.isArray(e.key) ? e.key : [];
+        if (keys.length === 0) continue;
+        if (!keys.some(testKey)) continue;
+
+        const sec = Array.isArray(e.keysecondary) ? e.keysecondary.filter(k => String(k || '').trim()) : [];
+        if (sec.length > 0) {
+            const matched = sec.filter(testKey).length;
+            const logic = Number(e.selectiveLogic) || 0;   // AND_ANY=0, NOT_ALL=1, NOT_ANY=2, AND_ALL=3
+            const ok = logic === 1 ? matched < sec.length
+                : logic === 2 ? matched === 0
+                : logic === 3 ? matched === sec.length
+                : matched > 0;                              // AND_ANY
+            if (!ok) continue;
+        }
+        hits.add(c.compositeKey);
+    }
+    return hits;
+}
+
 /** 로어북별 채택 수 — "왜 메인 로어북만 들어가지?"를 로그만 보고 판단할 수 있게. */
 function perBookLabel(entries, lorebooks) {
     const count = new Map(lorebooks.map(lb => [lb, 0]));
@@ -854,12 +914,35 @@ async function _selectFast(candidates, queries, settings, lorebooks, engine) {
 
     const scored = [...fused.values()].sort((a, b) => b.score - a.score);
 
-    // --- 4. 컷오프 + 상한 ---
-    let kept = scored;
+    // --- 4. 키워드 직격 (컷오프 **면제**, 우선순위 강제는 안 함) ---
+    // 엔트리 자신의 키워드가 대화에 그대로 나오면 상대 컷오프에서 빼준다.
+    // managed 모드는 ST의 키워드 발동을 꺼버리므로, 여기서 안 챙기면 고유명사가 영영 안 들어간다
+    // (어휘는 완전 일치하는데 의미 유사도는 안 높아서 "양쪽 엔진 동의" 조건에 늘 걸린다).
+    //
+    // ⚠️ 앞자리로 밀어주지는 않는다. 실제 로어북 키워드엔 job/touch/campus/friends 같은
+    // 일상어가 섞여 있어서, 우선순위까지 주면 매 턴 그것들이 maxK를 다 차지한다.
+    // 면제만 해두면 — 진짜 화제인 엔트리는 BM25 점수가 높아 자연히 위로 오고,
+    // 일상어로 걸린 엔트리는 점수가 낮아 남는 자리에만 들어간다.
+    const kwOn = getSettings().keywordMatchEnabled !== false;
+    const kwHits = kwOn ? matchKeywordEntries(candidates, queries.bm25) : new Set();
+
+    // --- 5. 컷오프 + 상한 ---
+    let kept = scored;                       // scored는 이미 점수 내림차순
     if (ratio > 0) {
         const cutoff = scored[0].score * ratio;
-        kept = scored.filter(s => s.score >= cutoff);
+        kept = scored.filter(s => s.score >= cutoff || kwHits.has(s.candidate.compositeKey));
     }
+
+    // 두 엔진 어디에도 안 잡혔는데 키워드만 맞는 엔트리 — 융합 결과에 없으니 따로,
+    // 그리고 **맨 뒤에** 붙인다 (점수 근거가 0이므로 남는 자리에만).
+    if (kwHits.size > 0) {
+        const inFused = new Set(scored.map(s => s.candidate.compositeKey));
+        const orphans = candidates.filter(c => kwHits.has(c.compositeKey) && !inFused.has(c.compositeKey));
+        if (orphans.length > 0) {
+            kept = [...kept, ...orphans.map(c => ({ candidate: c, score: 0, v: null, b: null }))];
+        }
+    }
+
     kept = kept.slice(0, maxK);
     if (kept.length === 0) kept = scored.slice(0, 1); // 안전망: 최소 1개
 
@@ -875,7 +958,8 @@ async function _selectFast(candidates, queries, settings, lorebooks, engine) {
     console.log(
         `${LOG_PREFIX} ${label}: ${entries.length} kept / ${scored.length} fused ` +
         `(vector ${vRanks.size}${vecThreshold != null ? `@${vecThreshold}` : ''}, bm25 ${bRanks.size}, ` +
-        `양쪽 ${both}, maxK ${maxK}${ratio > 0 ? `, ratio ${ratio}` : ''}) ` +
+        `양쪽 ${both}, maxK ${maxK}${ratio > 0 ? `, ratio ${ratio}` : ''}` +
+        `${kwHits.size > 0 ? `, 키워드 ${kwHits.size}` : ''}) ` +
         `vec ${vecMs.toFixed(0)}ms/${queries.vector.length}자 · bm25 ${bmMs.toFixed(0)}ms/${queries.bm25.length}자, ` +
         `[${perBookLabel(entries, lorebooks)}]`,
     );

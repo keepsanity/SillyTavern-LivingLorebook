@@ -134,6 +134,11 @@ export function bindSettingsInputs(panel) {
         });
     }
 
+    bind('#ll_s_reorg_batch', 'reorganizeBatchSize', v => {
+        const n = parseInt(v, 10);
+        return (Number.isFinite(n) && n >= 3 && n <= 40) ? n : 12;
+    });
+
     // Select bind (reorganizeOldHandling)
     const reorgEl = panel.querySelector('#ll_s_reorg_handling');
     if (reorgEl) {
@@ -341,6 +346,17 @@ export function bindSettingsInputs(panel) {
             refreshVectorSourceStatus();
         });
     }
+    const kwEl = panel.querySelector('#ll_s_keyword_match');
+    if (kwEl) {
+        kwEl.checked = settings.keywordMatchEnabled !== false;
+        kwEl.addEventListener('change', () => {
+            settings.keywordMatchEnabled = kwEl.checked;
+            saveSettings();
+            clearSelectionCache();
+            toastr.info(kwEl.checked ? '키워드 직격 ON — 키워드 일치 시 상대 컷오프 면제' : '키워드 직격 OFF — 점수만으로 선택');
+        });
+    }
+
     bind('#ll_s_bm25_floor', 'bm25MinScoreRatio', v => {
         const n = parseFloat(v);
         return (Number.isFinite(n) && n >= 0 && n <= 1) ? n : 0.35;

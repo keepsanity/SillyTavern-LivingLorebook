@@ -66,6 +66,7 @@ export const DEFAULT_SETTINGS = {
 
     // 재구성 시 기존 엔트리 처리: 'hide' | 'delete'
     reorganizeOldHandling: 'hide',
+    reorganizeBatchSize: 12,           // 재구성 시 한 번에 다룰 엔트리 수 (작을수록 안전, 호출 수 ↑)
 
     // 기억 정리 후 분석한 메시지 자동 하이드
     hideAfterOrganize: true,
@@ -100,6 +101,7 @@ export const DEFAULT_SETTINGS = {
     bm25PrefilterK: 30,                // BM25 prefilter top-K (Enabled시 후보가 이보다 많을 때만)
     // BM25 관련도 바닥선 — 1등 점수 대비 이 비율 미만은 후보에서 제외. 0이면 끔.
     // BM25는 단어 하나만 겹쳐도 score>0이라, 없으면 maxK가 유일한 필터가 되어 매 턴 상한을 꽉 채운다.
+    keywordMatchEnabled: true,         // 엔트리 키워드가 대화에 그대로 나오면 상대 컷오프 면제 (우선순위는 안 줌)
     bm25MinScoreRatio: 0.35,
     // (deprecated) vectorPrefilter* — vector hash 매칭 불안정으로 BM25로 교체됨
     selectionScanDepth: 8,             // AI 선택용 채팅 컨텍스트 길이
@@ -349,6 +351,17 @@ export function initStore(context) {
     // BM25는 단어 하나만 겹쳐도 통과라, 이게 없으면 maxK가 유일한 필터가 되어
     // 관련 없는 턴에도 상한을 꽉 채운다(무관한 인물 로어가 딸려오는 원인).
     // 벡터가 아예 못 뜬 턴(BM25 폴백)에는 전부 단독이라 이 컷이 자동으로 무력해진다 → 안전.
+    // 재구성 안전 마이그레이션 (v6) — 저장된 '삭제'를 '하이드'로 1회 전환.
+    // 재구성은 AI 응답으로 로어북을 통째 갈아끼우므로, 응답이 뭔가 빠뜨리면 그대로 영구 소실된다.
+    // 실제로 그렇게 사건 엔트리 20개를 잃었다(2026-08-23). 하이드면 되돌릴 수 있다.
+    if (!_settings._reorgSafeV6) {
+        if (_settings.reorganizeOldHandling === 'delete') {
+            _settings.reorganizeOldHandling = 'hide';
+            console.log('[LivingLorebook] 재구성 시 기존 엔트리 처리: 삭제 → 하이드로 변경 (복구 가능하도록). 설정에서 되돌릴 수 있습니다.');
+        }
+        _settings._reorgSafeV6 = true;
+    }
+
     // 죽은 설정 청소 (v5) — 아무 코드도 안 읽는 키가 settings.json에 남아 혼란만 준다
     if (!_settings._deadKeysV5) {
         const dead = ['selectionInjectionDepth', 'selectionInjectionRole', 'tier2MessageAge',
@@ -418,6 +431,116 @@ function deleteMetadata(uid, lorebookName) {
     const key = makeMetaKey(uid, lorebookName);
     delete _settings.entryMetadata[key];
     saveSettings();
+}
+
+// ============================================================
+// 메타데이터 재구축 — 로어북 파일과 LL 메타데이터가 어긋났을 때 복구
+// ============================================================
+
+const PLACE_WORDS = /\b(hall|house|center|centre|park|bakery|diner|cart|building|residence|dormitory|dorm|apartment|store|shop|cafe|bar|gym|field|stadium|room|library|office)\b/i;
+
+const TAG_TO_CATEGORY = {
+    story_arc: 'arc', character_info: 'character', relationship_info: 'relationship',
+    location_info: 'location', event_log: 'event', routine_info: 'routine',
+    item_info: 'item', world_setting: 'fact',
+};
+
+/**
+ * 제목(+본문)에서 카테고리를 추론한다. LLM 없이 즉시.
+ *
+ * 순서가 곧 우선순위다 — 좁고 확실한 신호부터 본다.
+ * (예: "인물 프로필"을 "장소"보다 먼저 봐야 "Mina Park — Character Profile"이
+ *  Park 때문에 장소로 새지 않는다. 실제로 겪은 오분류다.)
+ * @returns {string} CATEGORIES의 키 (내부 전용 — rebuildLorebookMetadata가 사용)
+ */
+function inferCategory(title, content) {
+    const t = String(title || '').trim();
+    const head = t.split(/\s*[—–-]\s*/)[0] || t;   // 첫 구간 = 보통 대상의 이름
+
+    if (/^story arc\b/i.test(t)) return 'arc';
+    if (/^(event|prior encounter|upcoming plan)\s*[—–\-:]/i.test(t)) return 'event';
+    if (/[—–\-]\s*character\s*(profile|note)/i.test(t)) return 'character';
+    if (/[—–\-]\s*relationship/i.test(t) || /relationship state/i.test(t)) return 'relationship';
+    if (/^[^—–\-]*\s&\s[^—–\-]*[—–\-]/.test(t)) return 'relationship';
+    if (/^item\s*[—–\-:]/i.test(t)) return 'item';
+    if (/\b(hoodie|bracelet|playlist|costume|jersey|dress|gift|bouquet|cake|necklace|ring)\b/i.test(t)) return 'item';
+    if (/[—–\-]\s*location\s*$/i.test(t)) return 'location';
+    // 이름 부분에만 장소어를 적용 — 뒷구간의 우연한 단어("…After Field Kiss")로 오분류 방지
+    if (PLACE_WORDS.test(head)) return 'location';
+    if (/\b(ritual|routine|habit|schedule|practice)\b/i.test(t)) return 'routine';
+    if (/^[A-Z][\w'’.]*(\s[A-Z][\w'’.]*)?(['’]s)?\s*[—–\-]/.test(t)
+        || /^[A-Z][\w'’.]*['’]s\s/.test(t)) return 'character';
+
+    const m = String(content || '').match(/<(story_arc|character_info|relationship_info|location_info|event_log|routine_info|item_info|world_setting)>/);
+    if (m) return TAG_TO_CATEGORY[m[1]];
+    return 'fact';
+}
+
+/**
+ * 로어북의 LL 메타데이터를 실제 엔트리 기준으로 다시 만든다.
+ *
+ * 언제 필요한가: 로어북 파일을 밖에서 교체했을 때(백업 복원, 임포트, 재구성 되돌리기).
+ * 메타데이터는 `로어북이름:uid` 로 저장되는데, 파일이 바뀌면 그 uid가 가리키는 엔트리도 바뀐다.
+ * → 옛 카테고리가 엉뚱한 엔트리에 붙고, 새로 생긴 uid는 메타데이터가 없어 전부 'fact'로 떨어진다.
+ *   (실제로 89개 로어북을 복원했더니 event 42개가 5개로 보였다.)
+ *
+ * summary는 있으면 보존한다 — 다시 만들려면 LLM 호출이 드니까.
+ * @param {string} lorebookName
+ * @param {object} data - 이미 로드한 로어북 (없으면 호출측에서 로드)
+ * @returns {{updated: number, seeded: number, orphans: number, byCategory: Record<string, number>}}
+ */
+export function rebuildLorebookMetadata(lorebookName, data) {
+    if (!lorebookName || !data?.entries) {
+        throw new Error('로어북을 로드할 수 없습니다.');
+    }
+    if (!_settings.entryMetadata || typeof _settings.entryMetadata !== 'object') {
+        _settings.entryMetadata = {};
+    }
+
+    const prefix = `${lorebookName}:`;
+    const validUids = new Set(Object.keys(data.entries));
+
+    // 1) 고아 메타데이터 제거 — 지금 로어북에 없는 uid
+    let orphans = 0;
+    for (const key of Object.keys(_settings.entryMetadata)) {
+        if (!key.startsWith(prefix)) continue;
+        if (!validUids.has(key.slice(prefix.length))) {
+            delete _settings.entryMetadata[key];
+            orphans++;
+        }
+    }
+
+    // 2) 엔트리마다 카테고리 재산정 (summary는 보존)
+    let updated = 0;
+    let seeded = 0;
+    const byCategory = {};
+    for (const [uid, entry] of Object.entries(data.entries)) {
+        const category = inferCategory(entry.comment, entry.content);
+        byCategory[category] = (byCategory[category] || 0) + 1;
+
+        const key = `${prefix}${uid}`;
+        const prev = _settings.entryMetadata[key];
+        if (prev) {
+            updated++;
+        } else {
+            seeded++;
+        }
+        _settings.entryMetadata[key] = {
+            tier: prev?.tier ?? 1,
+            createdAt: prev?.createdAt ?? Date.now(),
+            summary: prev?.summary ?? '',
+            ...(prev?.live ? { live: true } : {}),
+            category,
+            keywords: Array.isArray(entry.key) && entry.key.length > 0
+                ? entry.key
+                : [entry.comment || 'untitled'],
+        };
+    }
+
+    saveSettings();
+    console.log(`[LivingLorebook] 메타데이터 재구축 [${lorebookName}]: `
+        + `갱신 ${updated} · 신규 ${seeded} · 고아 제거 ${orphans}`, byCategory);
+    return { updated, seeded, orphans, byCategory };
 }
 
 // ============================================================

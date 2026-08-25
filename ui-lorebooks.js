@@ -10,6 +10,7 @@ import {
     getSettings, saveSettings,
     loadTargetLorebook, loadAnyLorebook,
     getMetadata, isManagedMode, getEffectiveSelectionLorebooks, migrateToManagedMode,
+    rebuildLorebookMetadata,
 } from './lore-store.js';
 import { clearSelectionCache } from './summary-retrieval.js';
 import { backfillSummaries } from './memory-manager.js';
@@ -70,6 +71,55 @@ async function handleMigrateLorebook(lorebookName, goingToManaged, btn) {
             btn.dataset.busy = '';
             btn.disabled = false;
         }
+    }
+}
+
+
+/**
+ * 메타데이터 재구축 — 로어북 파일을 밖에서 교체했을 때 카테고리/키워드를 실제 엔트리에 맞춘다.
+ */
+async function handleRebuildMetadata(lorebookName, btn, panel) {
+    if (!lorebookName) return;
+    if (btn?.dataset.busy === '1') return;
+
+    const settings = getSettings();
+    const data = lorebookName === settings.targetLorebook
+        ? await loadTargetLorebook()
+        : await loadAnyLorebook(lorebookName);
+    if (!data?.entries) {
+        toastr.error(`로어북 "${lorebookName}"을 로드할 수 없습니다.`);
+        return;
+    }
+
+    const count = Object.keys(data.entries).length;
+    if (!window.confirm(`"${lorebookName}"의 LL 메타데이터를 현재 엔트리 ${count}개 기준으로 다시 만듭니다.\n\n`
+        + `• 카테고리를 제목에서 다시 판정합니다 (AI 호출 없음)\n`
+        + `• 지금 로어북에 없는 uid의 메타데이터는 제거합니다\n`
+        + `• summary는 있으면 그대로 둡니다\n\n계속하시겠습니까?`)) return;
+
+    btn.dataset.busy = '1';
+    btn.disabled = true;
+    const orig = btn.innerHTML;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+
+    try {
+        const r = rebuildLorebookMetadata(lorebookName, data);
+        const summary = Object.entries(r.byCategory)
+            .sort((a, b) => b[1] - a[1])
+            .map(([c, n]) => `${c} ${n}`)
+            .join(' · ');
+        toastr.success(`[${lorebookName}] 재구축 완료 — ${summary}`
+            + (r.orphans > 0 ? ` (고아 ${r.orphans}개 제거)` : ''), 'LivingLorebook', { timeOut: 10000 });
+        clearSelectionCache();
+        renderSelectionLorebookList(panel);
+        await refreshPanel();
+    } catch (err) {
+        console.error(`${LOG_PREFIX} Rebuild metadata failed:`, err);
+        toastr.error(err.message || '재구축에 실패했습니다.');
+        btn.innerHTML = orig;
+    } finally {
+        btn.dataset.busy = '';
+        btn.disabled = false;
     }
 }
 
@@ -212,6 +262,9 @@ export async function renderSelectionLorebookList(panel) {
                 <button class="menu_button ll-lb-migrate" style="font-size:11px;padding:3px 8px;width:unset;">
                     <i class="fa-solid fa-arrow-right-arrow-left"></i> <span class="ll-lb-migrate-label">전환/해제</span>
                 </button>
+                <button class="menu_button ll-lb-rebuild" title="로어북 파일을 밖에서 바꿨을 때(복원/임포트) 카테고리를 다시 매깁니다" style="font-size:11px;padding:3px 8px;width:unset;">
+                    <i class="fa-solid fa-wrench"></i> 메타 재구축
+                </button>
             </div>
         </div>
     `).join('');
@@ -251,6 +304,10 @@ export async function renderSelectionLorebookList(panel) {
         }
         if (backfillBtn) {
             backfillBtn.addEventListener('click', () => handleBackfillLorebook(name, backfillBtn));
+        }
+        const rebuildBtn = card.querySelector('.ll-lb-rebuild');
+        if (rebuildBtn) {
+            rebuildBtn.addEventListener('click', () => handleRebuildMetadata(name, rebuildBtn, panel));
         }
         if (migrateBtn) {
             migrateBtn.addEventListener('click', () => {

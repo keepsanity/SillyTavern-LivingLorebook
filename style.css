@@ -158,9 +158,17 @@
    Main Panel — Full Timeline Modal
    ============================================================ */
 
+/* ⚠️ position:fixed 요소는 %/inset 대신 뷰포트 단위(vw/dvh)를 쓴다.
+   조상(여기선 <html>)에 transform이 걸리면 fixed의 기준이 뷰포트가 아니라 그 조상 박스가 된다.
+   그 박스 높이가 0으로 접히면 `top:50%`가 0px이 되어 모달이 화면 위로 튀어나간다
+   (실제로 932x839 창에서 left:50%는 466px로 맞는데 top:50%만 0px이 나왔다).
+   vw/dvh는 조상과 무관하게 뷰포트 기준이라 이 사고를 안 당한다. */
 .ll-panel-overlay {
     position: fixed;
-    inset: 0;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100dvh;
     background: rgba(0, 0, 0, 0.5);
     z-index: 31001;
     display: none;
@@ -179,10 +187,10 @@
 .ll-panel {
     position: fixed;
     top: 10px;
-    left: 50%;
+    left: 50vw;
     transform: translateX(-50%);
     width: min(680px, calc(100vw - 20px));
-    height: calc(100vh - 20px);
+    height: calc(100dvh - 20px);
     background: var(--SmartThemeBlurTintColor, rgba(20, 20, 30, 0.95));
     border: 1px solid var(--SmartThemeBorderColor, #555);
     border-radius: 16px;
@@ -207,9 +215,9 @@
 /* 데스크톱에서는 중앙 정렬 */
 @media (min-width: 768px) {
     .ll-panel {
-        top: 50%;
+        top: 50dvh;
         transform: translate(-50%, -50%);
-        height: min(85vh, 700px);
+        height: min(85dvh, 700px);
     }
 }
 
@@ -221,6 +229,7 @@
         top: 0;
         left: 0;
         transform: none;
+        /* left:0 이므로 50vw 상속을 확실히 덮는다 */
         border-radius: 0;
         border: none;
     }

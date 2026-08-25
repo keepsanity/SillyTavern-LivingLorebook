@@ -282,9 +282,24 @@ async function handleReorganize() {
 
     setToolbarProcessing(true, 'reorganize');
 
+    // 배치 진행률을 버튼에 표시한다. setToolbarProcessing은 클래스만 건드리므로
+    // innerHTML은 여기서 직접 저장/복원해야 라벨이 안 날아간다.
+    const btn = document.querySelector('[data-action="reorganize"]');
+    const btnHTML = btn?.innerHTML;
+
     try {
-        const result = await reorganizeExisting();
-        toastr.success(`${result.reorganized}개의 엔트리로 재구성되었습니다.`);
+        const result = await reorganizeExisting({
+            onProgress: (done, total) => {
+                if (btn) btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${done}/${total}`;
+            },
+        });
+        const kept = Math.round((result.keepRatio ?? 1) * 100);
+        toastr.success(
+            `${result.reorganized}개의 엔트리로 재구성되었습니다. `
+            + `(배치 ${result.batches}회 · 분량 ${kept}% 유지 · 기존 엔트리는 ${result.handling === 'delete' ? '삭제' : '하이드'})`
+            + (result.truncated > 0 ? ` ⚠ 응답 잘림 ${result.truncated}배치 — 배치 크기를 줄여 다시 시도하세요` : ''),
+            'LivingLorebook', { timeOut: 8000 },
+        );
         if (result.arcUpdated) {
             toastr.info('📖 줄거리도 업데이트됨', '자동 체인', { timeOut: 4000 });
         }
@@ -293,6 +308,7 @@ async function handleReorganize() {
         console.error(`${LOG_PREFIX} Reorganize failed:`, err);
         toastr.error(err.message || '재구성에 실패했습니다.');
     } finally {
+        if (btn && btnHTML !== undefined) btn.innerHTML = btnHTML;
         setToolbarProcessing(false);
     }
 }

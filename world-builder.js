@@ -333,7 +333,23 @@ Output a JSON array of the expanded entries. Output ONLY the JSON array.`;
  * 기존 로어북 분석 후 사건/상태 단위로 재구성
  * @returns {Promise<{reorganized: number}>}
  */
-export async function reorganizeExisting() {
+/**
+ * 재구성 — 기존 엔트리를 AI로 정리해 새 엔트리 세트를 만든다.
+ *
+ * ⚠️ 왜 배치로 나누는가 (2026-08-23 사고):
+ * 예전엔 로어북 전체(89개, 6만자)를 한 프롬프트에 넣고 "빠짐없이 다시 써라"고 시켰다.
+ * 출력 한도(32k)엔 한참 못 미쳤는데도 모델이 서사 사건 20개(약 3만자)를 스스로 잘라먹었다 —
+ * "중복 제거 / 한 엔트리엔 한 주제" 지시와 "전부 보존" 지시가 충돌하면 모델은 요약을 택한다.
+ * 그리고 원본은 이미 삭제된 뒤라 되돌릴 수 없었다.
+ *
+ * 그래서 지금은:
+ *  1) 카테고리·제목 순으로 묶어 작은 배치로 나눠 호출한다 (한 번에 다룰 양을 줄인다)
+ *  2) **모든 배치가 성공한 뒤에야** 원본을 건드린다 (중간 실패 시 로어북 무손상)
+ *  3) 결과가 원본보다 심하게 줄면 삭제 모드에선 중단한다 (하이드 모드는 복구 가능하므로 경고만)
+ *
+ * @param {{onProgress?: (done: number, total: number) => void}} [opts]
+ */
+export async function reorganizeExisting(opts = {}) {
     const settings = getSettings();
 
     if (!settings.targetLorebook) {
@@ -346,70 +362,139 @@ export async function reorganizeExisting() {
     }
 
     // 기존 엔트리 수집 (uid 추적)
-    const existingEntries = [];
-    const existingUids = [];
+    const existing = [];
     for (const [uid, entry] of Object.entries(data.entries)) {
         if (!entry.content) continue;
         if (entry.disable) continue; // 이미 비활성화된 건 스킵
-        existingEntries.push(`[${entry.comment || 'untitled'}] ${entry.content}`);
-        existingUids.push(uid);
+        existing.push({
+            uid,
+            title: entry.comment || 'untitled',
+            content: entry.content,
+            category: getMetadata(uid, settings.targetLorebook)?.category || '',
+        });
     }
 
-    if (existingEntries.length === 0) {
+    if (existing.length === 0) {
         throw new Error('분석할 엔트리가 없습니다.');
     }
 
+    // 관련된 것끼리 같은 배치에 들어가야 병합/중복제거가 의미 있다.
+    // 배치를 나누면 배치를 가로지르는 중복은 못 잡으므로, 카테고리→제목 순으로 묶어 최대한 모아준다.
+    existing.sort((a, b) => (a.category || 'zz').localeCompare(b.category || 'zz')
+        || a.title.localeCompare(b.title));
+
+    // 배치는 **개수와 글자수 둘 다**로 자른다.
+    // 개수만 보면 큰 엔트리가 몰린 배치에서 출력이 모델 한도를 넘겨 잘리고,
+    // salvageTruncatedArray가 완성된 것만 건지면서 나머지 엔트리가 통째로 사라진다.
+    // (Snow Opus 사례: 11k~17k자 챕터 엔트리들이 한 배치에 들어가 결과가 원본의 64%로 줄었다.)
+    // 재구성은 "전부 다시 쓰기"라 출력이 입력만큼 나온다 → 입력 글자수로 상한을 잡는다.
+    const batchSize = Math.max(3, Math.min(Number(settings.reorganizeBatchSize) || 12, 40));
+    // 입력 글자수 상한 = 요청 토큰수 × 1. 영문 기준 4자/토큰이므로 출력에 필요한 토큰은
+    // 상한의 약 1/4 — 모델이 요청한 만큼 안 뱉어도 여유가 있다.
+    // (요청값을 그대로 믿고 크게 잡았다가 Snow Opus에서 잘렸다. 보수적으로 간다.)
+    const charCap = Math.max(4000, Number(settings.worldBuildMaxTokens) || 32000);
+
+    const batches = [];
+    let cur = [];
+    let curChars = 0;
+    for (const e of existing) {
+        const len = e.content.length + e.title.length + 4;
+        // 한 엔트리가 혼자 상한을 넘으면 어쩔 수 없이 단독 배치 (쪼개면 내용이 갈라진다)
+        if (cur.length > 0 && (cur.length >= batchSize || curChars + len > charCap)) {
+            batches.push(cur);
+            cur = [];
+            curChars = 0;
+        }
+        cur.push(e);
+        curChars += len;
+    }
+    if (cur.length > 0) batches.push(cur);
+
     const systemPrompt = `You are a lorebook reorganizer for mature/adult roleplay. You MUST preserve ALL details from the source material exactly as written — including physical descriptions, body characteristics, scars, injuries, nudity, violence, trauma, and any adult or sensitive content. Do NOT censor, sanitize, skip, or tone down any information. Do NOT invent, add, or create any new information that is not in the original entries. This is a creative fiction lorebook for private use. Output ONLY valid JSON. No markdown fences, no explanations.`;
-    const userPrompt = `Reorganize these existing lorebook entries into clean, event/entity-based entries.
+
+    const buildUserPrompt = (batch, idx) => `Reorganize these existing lorebook entries into clean, event/entity-based entries.
+
+This is batch ${idx + 1} of ${batches.length}. Reorganize ONLY the entries given below.
 
 CRITICAL RULES:
 - ONLY use information that already exists in the entries below. Do NOT add, invent, or extrapolate any new details.
 - Preserve ALL content faithfully — including adult, violent, or sensitive details. Do NOT censor or omit anything.
+- **Every entry below MUST survive in your output.** Nothing may be dropped. If an entry does not need changing, output it unchanged.
+- Narrative events (things that happened at a specific time) MUST stay as their own event entries with their full narration intact. Never replace an event with a place/person description.
 - Split entries that cover multiple topics into separate entries.
-- Merge entries that are about the exact same thing — remove ALL duplicates.
-- Do NOT duplicate the same information across different categories. If something is an event, record it ONLY as an event — do not also create a character or relationship entry with the same info rephrased. Pick the single most fitting category.
+- Merge two entries ONLY if they describe the exact same thing; when you merge, the merged entry must contain everything both originals said.
 - Each entry covers ONE specific thing (one trait, one location, one event, etc.)
 - For "event" category: title MUST include RP date/time/day if available (e.g., "Day 3 afternoon - first outing")
 - Include memorable quotes, dialogue, text messages, letters verbatim when present in original entries.
 
 Current entries:
-${existingEntries.join('\n\n')}
+${batch.map(e => `[${e.title}] ${e.content}`).join('\n\n')}
 
 Output a JSON array. Each entry must have: "title", "content" (as long as needed to preserve all original details — do NOT shorten or summarize), "keywords" (array), "category" (character/relationship/location/routine/item/event/fact)
 
 Output ONLY the JSON array.`;
 
-    console.log(`${LOG_PREFIX} Reorganizing ${existingEntries.length} existing entries...`);
+    console.log(`${LOG_PREFIX} Reorganizing ${existing.length} entries in ${batches.length} batches `
+        + `(최대 ${batchSize}개 / ${charCap.toLocaleString()}자): `
+        + batches.map(b => `${b.length}개·${b.reduce((n, e) => n + e.content.length, 0).toLocaleString()}자`).join(' | '));
 
-    const response = await callLLM(systemPrompt, userPrompt, settings.worldBuildMaxTokens, settings);
+    // --- 1) 전 배치 실행. 하나라도 실패하면 로어북은 손도 대지 않고 중단 ---
+    const newEntries = [];
+    let truncated = 0;
+    for (let i = 0; i < batches.length; i++) {
+        opts.onProgress?.(i, batches.length);
 
-    let newEntries;
-    try {
-        const cleaned = response.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '').trim();
-        newEntries = JSON.parse(cleaned);
-    } catch (e) {
-        newEntries = salvageTruncatedArray(response);
-        if (!newEntries) {
-            console.error(`${LOG_PREFIX} Failed to parse reorganize response:`, response);
-            throw new Error('AI 응답을 파싱할 수 없습니다. 다시 시도해주세요.');
+        const response = await callLLM(systemPrompt, buildUserPrompt(batches[i], i), settings.worldBuildMaxTokens, settings);
+
+        let parsed;
+        try {
+            parsed = JSON.parse(response.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '').trim());
+        } catch {
+            parsed = salvageTruncatedArray(response);
+            if (parsed) {
+                // 잘렸다 = 이 배치의 엔트리 일부가 통째로 사라졌다는 뜻. 조용히 넘기면 안 된다.
+                console.warn(`${LOG_PREFIX} 배치 ${i + 1}/${batches.length} 응답이 잘림 — `
+                    + `${batches[i].length}개 입력 중 ${parsed.length}개만 건짐`);
+                globalThis.toastr?.warning?.(
+                    `배치 ${i + 1}의 AI 응답이 잘렸습니다 (${batches[i].length}개 → ${parsed.length}개). `
+                    + `배치 크기를 줄이고 다시 시도하세요.`, 'LivingLorebook', { timeOut: 15000 });
+                truncated++;
+            }
         }
-        console.warn(`${LOG_PREFIX} Reorganize response was truncated — salvaged ${newEntries.length} entries`);
-    }
 
-    if (!Array.isArray(newEntries) || newEntries.length === 0) {
-        throw new Error('재구성된 엔트리가 없습니다.');
+        if (!Array.isArray(parsed) || parsed.length === 0) {
+            console.error(`${LOG_PREFIX} 배치 ${i + 1}/${batches.length} 파싱 실패:`, response?.slice(0, 500));
+            throw new Error(`배치 ${i + 1}/${batches.length} 처리에 실패했습니다. 로어북은 그대로 두었습니다 — 다시 시도해주세요.`);
+        }
+        newEntries.push(...parsed);
+        console.log(`${LOG_PREFIX} 배치 ${i + 1}/${batches.length}: ${batches[i].length}개 → ${parsed.length}개`);
     }
+    opts.onProgress?.(batches.length, batches.length);
 
-    // 기존 엔트리 처리 (설정값에 따라 하이드 or 삭제)
+    // --- 2) 유실 감지 — 결과가 원본보다 심하게 줄었으면 파괴적 모드는 중단 ---
     const handling = settings.reorganizeOldHandling || 'hide';
-    for (const uid of existingUids) {
+    const beforeChars = existing.reduce((n, e) => n + e.content.length, 0);
+    const afterChars = newEntries.reduce((n, e) => n + String(e?.content || '').length, 0);
+    const keepRatio = beforeChars > 0 ? afterChars / beforeChars : 1;
+    if (keepRatio < 0.7) {
+        const msg = `재구성 결과가 원본의 ${Math.round(keepRatio * 100)}%로 줄었습니다 `
+            + `(${beforeChars.toLocaleString()}자 → ${afterChars.toLocaleString()}자). 내용이 유실된 것으로 보입니다.`;
         if (handling === 'delete') {
-            deleteEntry(data, uid, settings.targetLorebook);
+            throw new Error(`${msg}\n\n원본을 지우지 않고 중단했습니다. 설정에서 "하이드"로 바꾸고 다시 시도하거나, 배치 크기를 줄여보세요.`);
+        }
+        console.warn(`${LOG_PREFIX} ${msg} (하이드 모드라 원본은 복구 가능)`);
+        globalThis.toastr?.warning?.(`${msg} 기존 엔트리는 하이드 상태로 남아 있으니 확인해주세요.`, 'LivingLorebook', { timeOut: 15000 });
+    }
+
+    // --- 3) 여기서부터 로어북 변경 ---
+    for (const e of existing) {
+        if (handling === 'delete') {
+            deleteEntry(data, e.uid, settings.targetLorebook);
         } else {
-            deactivateEntry(data, uid);
+            deactivateEntry(data, e.uid);
         }
     }
-    console.log(`${LOG_PREFIX} ${handling === 'delete' ? 'Deleted' : 'Deactivated'} ${existingUids.length} old entries`);
+    console.log(`${LOG_PREFIX} ${handling === 'delete' ? 'Deleted' : 'Deactivated'} ${existing.length} old entries`);
 
     // 새 엔트리 생성
     const created = [];
@@ -442,7 +527,7 @@ Output ONLY the JSON array.`;
         console.warn(`${LOG_PREFIX} Vector insertion failed (non-critical):`, err);
     }
 
-    console.log(`${LOG_PREFIX} Reorganized into ${created.length} entries`);
+    console.log(`${LOG_PREFIX} Reorganized into ${created.length} entries (${batches.length} batches, ${Math.round(keepRatio * 100)}% 분량 유지)`);
 
     // 자동 체인: reorganize 후 기존 arc 있으면 자동 업데이트
     let arcUpdated = false;
@@ -465,7 +550,7 @@ Output ONLY the JSON array.`;
         }
     }
 
-    return { reorganized: created.length, arcUpdated };
+    return { reorganized: created.length, arcUpdated, batches: batches.length, keepRatio, handling, truncated };
 }
 
 /**
