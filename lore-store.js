@@ -101,7 +101,7 @@ export const DEFAULT_SETTINGS = {
     bm25PrefilterK: 30,                // BM25 prefilter top-K (Enabled시 후보가 이보다 많을 때만)
     // BM25 관련도 바닥선 — 1등 점수 대비 이 비율 미만은 후보에서 제외. 0이면 끔.
     // BM25는 단어 하나만 겹쳐도 score>0이라, 없으면 maxK가 유일한 필터가 되어 매 턴 상한을 꽉 채운다.
-    keywordMatchEnabled: true,         // 엔트리 키워드가 대화에 그대로 나오면 상대 컷오프 면제 (우선순위는 안 줌)
+    keywordMatchEnabled: true,         // 키워드가 대화에 그대로 나오면 상대 컷오프 면제 (점수 낮아도 살림)
     bm25MinScoreRatio: 0.35,
     // (deprecated) vectorPrefilter* — vector hash 매칭 불안정으로 BM25로 교체됨
     selectionScanDepth: 8,             // AI 선택용 채팅 컨텍스트 길이
@@ -351,6 +351,18 @@ export function initStore(context) {
     // BM25는 단어 하나만 겹쳐도 통과라, 이게 없으면 maxK가 유일한 필터가 되어
     // 관련 없는 턴에도 상한을 꽉 채운다(무관한 인물 로어가 딸려오는 원인).
     // 벡터가 아예 못 뜬 턴(BM25 폴백)에는 전부 단독이라 이 컷이 자동으로 무력해진다 → 안전.
+    // 키워드 설정 정리 (v7) — 잠깐 뒀던 '게이트'(키워드 없으면 후보에서 제외)를 없앤다.
+    // 게이트는 이름이 문자 그대로 나와야만 통과시켜서 "그 핑크색 가방 든 애" 같은 묘사로 찾는
+    // 의미 검색을 통째로 무력화했다. 그건 벡터 검색을 쓰는 이유 자체다.
+    if (!_settings._keywordCleanupV7) {
+        if (typeof _settings.keywordMode === 'string') {
+            _settings.keywordMatchEnabled = _settings.keywordMode !== 'off';
+        }
+        delete _settings.keywordMode;
+        delete _settings.keywordGateEnabled;
+        _settings._keywordCleanupV7 = true;
+    }
+
     // 재구성 안전 마이그레이션 (v6) — 저장된 '삭제'를 '하이드'로 1회 전환.
     // 재구성은 AI 응답으로 로어북을 통째 갈아끼우므로, 응답이 뭔가 빠뜨리면 그대로 영구 소실된다.
     // 실제로 그렇게 사건 엔트리 20개를 잃었다(2026-08-23). 하이드면 되돌릴 수 있다.

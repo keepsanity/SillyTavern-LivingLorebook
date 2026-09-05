@@ -650,6 +650,7 @@ Maximum ${aiSelectK} entries. Output ONLY the JSON object.`;
  */
 const RRF_K = 60;
 
+
 /** 소스 불일치 경고를 매 생성마다 띄우지 않기 위한 1회 플래그 */
 let _sigWarned = null;
 
@@ -729,10 +730,11 @@ async function _vectorRanks(candidates, queryText, settings, lorebooks) {
     const t0 = performance.now();
     const ranks = new Map();
     let note = '';
-    try {
-        // 컬렉션마다 /query를 부르면 검색 텍스트를 매번 다시 임베딩한다 → 로어북 수만큼 느려짐.
-        // query-multi는 임베딩 1회 + 컬렉션을 가로질러 전역 정렬 후 topK 컷.
-        const grouped = await queryMultipleCollections([...idToLb.keys()], queryText, topK, threshold);
+
+    // 컬렉션마다 /query를 부르면 검색 텍스트를 매번 다시 임베딩한다 → 로어북 수만큼 느려짐.
+    // query-multi는 임베딩 1회 + 컬렉션을 가로질러 전역 정렬 후 topK 컷.
+    const runQuery = async (th) => {
+        const grouped = await queryMultipleCollections([...idToLb.keys()], queryText, topK, th);
         for (const [collectionId, res] of Object.entries(grouped || {})) {
             const lbName = idToLb.get(collectionId);
             if (!lbName) continue;
@@ -749,6 +751,15 @@ async function _vectorRanks(candidates, queryText, settings, lorebooks) {
                 }
             }
         }
+    };
+
+    try {
+        // 0개가 나와도 임계값을 낮춰 재시도하지 않는다.
+        // 벡터가 0개인 건 고장이 아니라 "이 턴엔 의미상 가까운 게 없다"는 답이다.
+        // 낮춰서 억지로 뽑으면 무관한 엔트리가 관련 있는 척 들어온다 —
+        // 실측: 무관한 턴은 전 항목 0.38~0.58인데 0.45로 낮추자 33개가 통과해 상한을 다 채웠다.
+        // (관련 있는 턴은 0.69~0.75가 나오므로 기본 0.6이 두 경우를 정확히 가른다.)
+        await runQuery(threshold);
     } catch (err) {
         // 한 번에 조회하므로 실패는 전부 아니면 전무 — BM25 폴백에 맡긴다
         note = 'query 실패';
@@ -834,11 +845,15 @@ function matchKeywordEntries(candidates, scanText) {
 function perBookLabel(entries, lorebooks) {
     const count = new Map(lorebooks.map(lb => [lb, 0]));
     for (const e of entries) count.set(e.lorebookName, (count.get(e.lorebookName) || 0) + 1);
-    return [...count.entries()].map(([lb, n]) => `${lb} ${n}`).join(' · ');
+    return [...count.entries()].map(([lb, n]) => `${lb}: ${n}개`).join(' · ');
 }
 
 async function _selectFast(candidates, queries, settings, lorebooks, engine) {
     const maxK = settings.vectorSelectMaxK || 12;
+
+    // 엔트리 키워드가 대화에 그대로 나왔는지 — 아래 컷오프 면제에 쓴다.
+    const kwOn = settings.keywordMatchEnabled !== false;
+    const kwHits = kwOn ? matchKeywordEntries(candidates, queries.bm25) : new Set();
     // 0이면 컷오프 끔(기본) — RRF 점수는 순위 기반이라 절대 유사도처럼 해석되지 않음.
     // 올리면 1등 대비 낮은 꼬리를 잘라낸다.
     const ratio = typeof settings.vectorCutoffRatio === 'number' ? settings.vectorCutoffRatio : 0;
@@ -862,9 +877,11 @@ async function _selectFast(candidates, queries, settings, lorebooks, engine) {
     }
 
     // --- 2. BM25 순위 ---
-    // hybrid에서 벡터가 아무것도 못 건졌으면(인덱스 없음/소스 변경/서버 오류) BM25로 자동 폴백.
+    // 벡터가 비어도 BM25는 돌린다 — 키워드가 걸린 엔트리의 순서를 매기는 데 쓰인다.
+    // (다만 아래 5단계에서 보듯, 벡터 무응답 턴에 BM25가 상한을 채우는 건 허용하지 않는다.)
     const bm25Needed = wantBm25 || vRanks.size === 0;
     let bRanks = new Map();
+    const bScores = new Map();   // 원점수 — 단독 모드에서 컷오프에 쓴다 (아래 참고)
     let bmMs = 0;
     if (bm25Needed) {
         const t0 = performance.now();
@@ -887,7 +904,10 @@ async function _selectFast(candidates, queries, settings, lorebooks, engine) {
                 ranked = kept;
             }
         }
-        ranked.forEach((r, i) => bRanks.set(r.entry.compositeKey, i + 1));
+        ranked.forEach((r, i) => {
+            bRanks.set(r.entry.compositeKey, i + 1);
+            bScores.set(r.entry.compositeKey, r.score);
+        });
         bmMs = performance.now() - t0;
     }
 
@@ -914,23 +934,61 @@ async function _selectFast(candidates, queries, settings, lorebooks, engine) {
 
     const scored = [...fused.values()].sort((a, b) => b.score - a.score);
 
-    // --- 4. 키워드 직격 (컷오프 **면제**, 우선순위 강제는 안 함) ---
-    // 엔트리 자신의 키워드가 대화에 그대로 나오면 상대 컷오프에서 빼준다.
-    // managed 모드는 ST의 키워드 발동을 꺼버리므로, 여기서 안 챙기면 고유명사가 영영 안 들어간다
-    // (어휘는 완전 일치하는데 의미 유사도는 안 높아서 "양쪽 엔진 동의" 조건에 늘 걸린다).
-    //
-    // ⚠️ 앞자리로 밀어주지는 않는다. 실제 로어북 키워드엔 job/touch/campus/friends 같은
-    // 일상어가 섞여 있어서, 우선순위까지 주면 매 턴 그것들이 maxK를 다 차지한다.
-    // 면제만 해두면 — 진짜 화제인 엔트리는 BM25 점수가 높아 자연히 위로 오고,
-    // 일상어로 걸린 엔트리는 점수가 낮아 남는 자리에만 들어간다.
-    const kwOn = getSettings().keywordMatchEnabled !== false;
-    const kwHits = kwOn ? matchKeywordEntries(candidates, queries.bm25) : new Set();
+    // --- 4. 컷오프 판단 ---
+    // 키워드 직격(kwHits)은 위에서 계산해뒀다. 상대 컷오프에서 **면제**만 해준다.
+    // 앞자리로 밀어주지는 않는다 — 실제 로어북 키워드엔 일상어가 섞여 있어서,
+    // 우선순위까지 주면 매 턴 그것들이 상한을 다 차지한다.
+
+    // 하이브리드에서 벡터가 0개인 건 **고장이 아니라 "의미상 가까운 게 없다"는 답**이다.
+    // 실측(nomic-embed-text): 관련 있는 턴은 0.69~0.75, 무관한 턴은 전 항목이 0.58 이하.
+    // 그런데 그때 BM25 순위로 상한을 채우면 그 장면과 무관한 엔트리가 그대로 들어간다
+    // (인물 프로필 47개 로어북에서 BM25 1등 64.9 ↔ 12등 40.8로 분포가 평평해 컷오프가 무력).
+    // 이 턴에 믿을 수 있는 근거는 키워드가 실제로 등장한 엔트리뿐이다. 없으면 0개가 맞다.
+    const vectorSilent = wantVector && vRanks.size === 0;
+    if (vectorSilent) {
+        // ⚠️ scored(=BM25 상위 + 바닥선 통과분)에서만 고르면 안 된다.
+        // 이름은 나왔는데 BM25 점수가 낮은 엔트리가 통째로 빠진다 — 키워드 직격을 넣은 이유 자체가 그거다.
+        // 그래서 후보 전체에서 키워드 일치분을 모으고, 순서만 BM25 점수로 매긴다.
+        const scoreOf = c => bScores.get(c.compositeKey) ?? -1;
+        const evidence = candidates
+            .filter(c => kwHits.has(c.compositeKey))
+            .sort((a, b) => scoreOf(b) - scoreOf(a))
+            .slice(0, maxK);
+
+        await measureAndStoreInjectionStats(evidence, false);
+        console.log(
+            `${LOG_PREFIX} ${engine}(벡터 무응답 ${vecNote ? '— ' + vecNote : ''}): `
+            + `${evidence.length} kept — 키워드 근거 있는 것만 (bm25 ${bRanks.size}, 키워드 ${kwHits.size}, maxK ${maxK}) `
+            + `bm25 ${bmMs.toFixed(0)}ms/${queries.bm25.length}자`
+            + (evidence.length > 0 ? `, [${perBookLabel(evidence, lorebooks)}]` : ''),
+        );
+        return {
+            entries: evidence,
+            fromCache: false,
+            stage: `${engine}-벡터무응답 (${evidence.length}/${scored.length})`,
+        };
+    }
 
     // --- 5. 컷오프 + 상한 ---
+    // 'bm25' 엔진(벡터 미사용)에선 RRF 점수에 컷오프를 걸어봐야 아무것도 안 잘린다.
+    // 단일 엔진 RRF는 1/(60+순위)라 1위 대비 12위가 85%다 → ratio 0.6은 42위 밑에서야 작동.
+    // 그래서 순위 대신 **BM25 원점수**에 같은 비율을 적용한다.
+    const soloBm25 = vRanks.size === 0 && bScores.size > 0;
     let kept = scored;                       // scored는 이미 점수 내림차순
     if (ratio > 0) {
-        const cutoff = scored[0].score * ratio;
-        kept = scored.filter(s => s.score >= cutoff || kwHits.has(s.candidate.compositeKey));
+        if (soloBm25) {
+            const top = Math.max(...bScores.values());
+            const cutoff = top * ratio;
+            kept = scored.filter(s => (bScores.get(s.candidate.compositeKey) ?? 0) >= cutoff
+                || kwHits.has(s.candidate.compositeKey));
+            if (kept.length < scored.length) {
+                console.log(`${LOG_PREFIX} BM25 단독 컷오프 ${ratio} (원점수 기준): `
+                    + `${scored.length} → ${kept.length}개 (1등 ${top.toFixed(2)}, 컷 ${cutoff.toFixed(2)})`);
+            }
+        } else {
+            const cutoff = scored[0].score * ratio;
+            kept = scored.filter(s => s.score >= cutoff || kwHits.has(s.candidate.compositeKey));
+        }
     }
 
     // 두 엔진 어디에도 안 잡혔는데 키워드만 맞는 엔트리 — 융합 결과에 없으니 따로,
@@ -950,17 +1008,13 @@ async function _selectFast(candidates, queries, settings, lorebooks, engine) {
     await measureAndStoreInjectionStats(entries, false);
 
     const both = kept.filter(s => s.v != null && s.b != null).length;
-    // 벡터를 쓰기로 했는데 하나도 못 건졌으면 BM25 폴백이 실제로 동작한 것 — 로그에 드러나게
-    const fellBack = wantVector && vRanks.size === 0;
-    const label = fellBack
-        ? `${engine}→bm25${vecNote ? ' (' + vecNote + ')' : ''}`
-        : engine;
+    const label = engine;   // 벡터 무응답은 위에서 따로 반환하므로 여기선 항상 정상 경로다
     console.log(
         `${LOG_PREFIX} ${label}: ${entries.length} kept / ${scored.length} fused ` +
         `(vector ${vRanks.size}${vecThreshold != null ? `@${vecThreshold}` : ''}, bm25 ${bRanks.size}, ` +
         `양쪽 ${both}, maxK ${maxK}${ratio > 0 ? `, ratio ${ratio}` : ''}` +
         `${kwHits.size > 0 ? `, 키워드 ${kwHits.size}` : ''}) ` +
-        `vec ${vecMs.toFixed(0)}ms/${queries.vector.length}자 · bm25 ${bmMs.toFixed(0)}ms/${queries.bm25.length}자, ` +
+        `${vecMs > 0 ? `vec ${vecMs.toFixed(0)}ms/${queries.vector.length}자 · ` : ''}bm25 ${bmMs.toFixed(0)}ms/${queries.bm25.length}자, ` +
         `[${perBookLabel(entries, lorebooks)}]`,
     );
     return { entries, fromCache: false, stage: `${label} (${entries.length}/${scored.length})` };

@@ -252,7 +252,7 @@ export const PANEL_HTML = `
                 <div class="ll-settings-row ll-eng-fast">
                     <label>키워드 직격</label>
                     <input class="ll-settings-input" id="ll_s_keyword_match" type="checkbox" style="width:auto;" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">엔트리 키워드가 대화에 그대로 나오면 상대 컷오프에서 면제 (인물 이름이 안 걸릴 때 ON)</span>
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">엔트리 키워드가 대화에 그대로 나오면 상대 컷오프에서 면제 (이름이 나왔는데 점수가 낮아 밀릴 때)</span>
                 </div>
                 <div class="ll-settings-row ll-eng-fast">
                     <label>상대 컷오프 비율</label>

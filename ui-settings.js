@@ -353,7 +353,7 @@ export function bindSettingsInputs(panel) {
             settings.keywordMatchEnabled = kwEl.checked;
             saveSettings();
             clearSelectionCache();
-            toastr.info(kwEl.checked ? '키워드 직격 ON — 키워드 일치 시 상대 컷오프 면제' : '키워드 직격 OFF — 점수만으로 선택');
+            toastr.info(kwEl.checked ? '키워드 직격 ON — 키워드 일치 시 컷오프 면제' : '키워드 직격 OFF — 점수만으로 선택');
         });
     }
 
