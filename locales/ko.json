@@ -318,5 +318,12 @@
   "ll.sidebar.7": "(위 Profile과 동일)",
   "ll.sidebar.8": "매 generation 직전 summary 보고 엔트리 고를 때만 사용. 분류 작업이라 Haiku 같은 싼 모델 권장. 비우면 위 Profile fallback.",
   "ll.sidebar.9": "Living Lorebook 패널 열기",
-  "ll.category.fact": "설정"
+  "ll.category.fact": "설정",
+  "ll.storage.archive": "리빙로어북 백업 파일을 저장하지 못했습니다. 원본 데이터는 유지됩니다.",
+  "ll.storage.read": "리빙로어북 복구 이력을 불러오지 못했습니다.",
+  "ll.storage.format": "지원하지 않는 리빙로어북 복구 이력 형식입니다.",
+  "ll.storage.retry": "리빙로어북 저장소 이전을 완료하지 못했습니다. 기존 데이터를 유지했습니다. 새로고침하면 다시 시도합니다.",
+  "ll.storage.historyFailed": "기억은 저장했지만 되돌리기 이력을 저장하지 못했습니다. 원문 메시지는 숨기지 않았습니다.",
+  "ll.storage.entryMissing": "엔트리를 찾을 수 없습니다.",
+  "ll.storage.metadataVersion": "지원하지 않는 리빙로어북 메타데이터 버전입니다."
 }

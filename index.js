@@ -8,7 +8,8 @@ import { l, lt } from './i18n.js';
 
 import { event_types } from '../../../events.js';
 import { chat_metadata, setExtensionPrompt } from '../../../../script.js';
-import { initStore, saveSettings, operationContext, isOperationCurrent } from './lore-store.js';
+import { initStore, saveSettings, operationContext, isOperationCurrent, migrateLegacyMetadata } from './lore-store.js';
+import { readHistory } from './history-storage.js';
 import { initLLMService } from './llm-service.js';
 import { populateLorebookDropdown } from './ui-shared.js';
 import { createSuggestModal } from './ui-suggest.js';
@@ -48,6 +49,17 @@ async function init() {
     // Init modules
     settings = initStore(context);
     initLLMService(context);
+    try {
+        if (settings.memoryJournal?.length) await readHistory();
+        const migration = await migrateLegacyMetadata();
+        if (migration.errors.length) {
+            console.warn('[LivingLorebook] Some metadata remains in settings for retry:', migration.errors);
+            toastr.warning(l('ll.storage.retry', 'Living Lorebook storage migration could not finish. Existing data was retained; reload to retry.'));
+        }
+    } catch (error) {
+        console.error('[LivingLorebook] Storage migration deferred; legacy data retained:', error);
+        toastr.warning(l('ll.storage.retry', 'Living Lorebook storage migration could not finish. Existing data was retained; reload to retry.'));
+    }
 
     // chat_metadata가 이미 ST에 로드된 상태면 즉시 복원 (init 후 CHAT_CHANGED가 안 발화할 수도 있음)
     if (chat_metadata && Object.keys(chat_metadata).length > 0) {

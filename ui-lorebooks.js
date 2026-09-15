@@ -104,7 +104,7 @@ async function handleRebuildMetadata(lorebookName, btn, panel) {
     btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
 
     try {
-        const r = rebuildLorebookMetadata(lorebookName, data);
+        const r = await rebuildLorebookMetadata(lorebookName, data);
         const summary = Object.entries(r.byCategory)
             .sort((a, b) => b[1] - a[1])
             .map(([c, n]) => `${c} ${n}`)

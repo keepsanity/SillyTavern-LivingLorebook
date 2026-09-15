@@ -4,6 +4,7 @@ import { getSettings, loadAnyLorebook, getMetadata, stageMetadata, createEntry, 
 import { callLLM } from './llm-service.js';
 import { MEMORY_POLICY, ORGANIZE_SCHEMA, validateProposal } from './memory-policy.js';
 import { buildBM25 } from './bm25.js';
+import { updateHistory } from './history-storage.js';
 
 const running = new Set();
 const messageSignature = m => JSON.stringify([m?.is_user, m?.name, m?.mes]);
@@ -113,11 +114,15 @@ export async function organizeMemories(chat, characterContext = '', options = {}
         }
         assertCurrent();
         if (proposal.changes.length) await saveLorebook(op.book, data);
-        for (const change of journal.changes) change.afterMeta = JSON.stringify(getMetadata(change.uid, op.book));
+        for (const change of journal.changes) {
+            change.after = JSON.stringify(data.entries[change.uid]);
+            change.afterMeta = JSON.stringify(getMetadata(change.uid, op.book));
+        }
         const current = getSettings();
         if (journal.changes.length) {
             // Bounded operation history. Each operation preserves all its affected entries.
-            current.memoryJournal = [...(current.memoryJournal || []), journal].slice(-5);
+            try { await updateHistory(entries => [...entries, journal]); }
+            catch (error) { throw new Error(l('ll.storage.historyFailed', 'Memories were saved, but undo history could not be saved. Source messages were not hidden.') + ' ' + error.message); }
         }
         current.organizeByChat ||= {};
         current.organizeByChat[op.chatId] = { index: end + 1, at: Date.now() };

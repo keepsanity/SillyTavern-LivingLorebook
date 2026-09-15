@@ -155,7 +155,7 @@ export async function handleEntryLiveToggle(uid, live) {
     try {
         // live는 순수 LL 메타데이터(WI 필드 아님) → setMetadata가 알아서 저장.
         // organize 때 이 플래그된 엔트리만 풀 내용으로 보내 갱신한다.
-        setMetadata(uid, { live }, settings.targetLorebook);
+        await setMetadata(uid, { live }, settings.targetLorebook);
         clearSelectionCache();
         await refreshPanel();
         toastr.info(live

@@ -1,4 +1,5 @@
 import { l, lt } from './i18n.js';
+import { initHistoryStorage, writeArchive } from './history-storage.js';
 /**
  * Lore Store — 설정 관리, 로어북 CRUD 래퍼, 티어 메타데이터
  */
@@ -280,6 +281,8 @@ export function initStore(context) {
         _context.extensionSettings[EXTENSION_NAME] = structuredClone(DEFAULT_SETTINGS);
     }
     _settings = _context.extensionSettings[EXTENSION_NAME];
+    metadataCache.clear();
+    initHistoryStorage(() => _settings, saveSettings);
 
     // Schema migration
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
@@ -304,9 +307,7 @@ export function initStore(context) {
     // 기존 키가 숫자 형태면 (구 형식) 전부 삭제
     if (_settings.entryMetadata && !_settings._metadataV2) {
         const oldKeys = Object.keys(_settings.entryMetadata).filter(k => !k.includes(':'));
-        for (const k of oldKeys) {
-            delete _settings.entryMetadata[k];
-        }
+        // Unscoped records cannot be assigned safely. Preserve them for backup/manual recovery.
         _settings._metadataV2 = true;
         console.log(`[LivingLorebook] Migrated ${oldKeys.length} old metadata entries`);
     }
@@ -411,24 +412,34 @@ function makeMetaKey(uid, lorebookName) {
     return `${name}:${uid}`;
 }
 
+const metadataCache = new Map();
+
+function embeddedMetadata(entry) {
+    const stored = entry?.extensions?.livingLorebook;
+    return stored?.version === 1 && stored.metadata && typeof stored.metadata === 'object' && !Array.isArray(stored.metadata) ? stored.metadata : null;
+}
+
+function cacheMetadata(name, data) {
+    const entries = new Map();
+    for (const [uid, entry] of Object.entries(data.entries || {})) {
+        entries.set(String(uid), structuredClone(embeddedMetadata(entry) || _settings.entryMetadata?.[`${name}:${uid}`] || null));
+    }
+    metadataCache.set(name, entries);
+}
+
 export function getMetadata(uid, lorebookName) {
     const key = makeMetaKey(uid, lorebookName);
-    return _settings.entryMetadata[key] || null;
+    const name = lorebookName ?? _settings.targetLorebook;
+    if (metadataCache.has(name)) return metadataCache.get(name).get(String(uid)) || null;
+    return _settings.entryMetadata?.[key] || null;
 }
 
-export function setMetadata(uid, data, lorebookName) {
-    const key = makeMetaKey(uid, lorebookName);
-    _settings.entryMetadata[key] = {
-        ...(_settings.entryMetadata[key] || {}),
-        ...data,
-    };
-    saveSettings();
-}
-
-function deleteMetadata(uid, lorebookName) {
-    const key = makeMetaKey(uid, lorebookName);
-    delete _settings.entryMetadata[key];
-    saveSettings();
+export async function setMetadata(uid, patch, lorebookName) {
+    const name = lorebookName ?? _settings.targetLorebook;
+    const data = await loadAnyLorebook(name);
+    if (!data?.entries?.[uid]) throw new Error(l('ll.storage.entryMissing', 'Entry not found.'));
+    stageMetadata(data, uid, patch, name);
+    await saveLorebook(name, data);
 }
 
 // ============================================================
@@ -487,7 +498,7 @@ function inferCategory(title, content) {
  * @param {object} data - 이미 로드한 로어북 (없으면 호출측에서 로드)
  * @returns {{updated: number, seeded: number, orphans: number, byCategory: Record<string, number>}}
  */
-export function rebuildLorebookMetadata(lorebookName, data) {
+export async function rebuildLorebookMetadata(lorebookName, data) {
     if (!lorebookName || !data?.entries) {
         throw new Error(l('ll.fb9199f839943224', "Could not load the lorebook."));
     }
@@ -503,7 +514,6 @@ export function rebuildLorebookMetadata(lorebookName, data) {
     for (const key of Object.keys(_settings.entryMetadata)) {
         if (!key.startsWith(prefix)) continue;
         if (!validUids.has(key.slice(prefix.length))) {
-            delete _settings.entryMetadata[key];
             orphans++;
         }
     }
@@ -516,14 +526,14 @@ export function rebuildLorebookMetadata(lorebookName, data) {
         const category = inferCategory(entry.comment, entry.content);
         byCategory[category] = (byCategory[category] || 0) + 1;
 
-        const key = `${prefix}${uid}`;
-        const prev = _settings.entryMetadata[key];
+        const prev = getMetadata(uid, lorebookName);
         if (prev) {
             updated++;
         } else {
             seeded++;
         }
-        _settings.entryMetadata[key] = {
+        stageMetadata(data, uid, {
+            ...prev,
             tier: prev?.tier ?? 1,
             createdAt: prev?.createdAt ?? Date.now(),
             summary: prev?.summary ?? '',
@@ -531,11 +541,11 @@ export function rebuildLorebookMetadata(lorebookName, data) {
             category,
             keywords: Array.isArray(entry.key) && entry.key.length > 0
                 ? entry.key
-                : [entry.comment || 'untitled'],
-        };
+                : (prev?.keywords || [entry.comment || 'untitled']),
+        }, lorebookName);
     }
 
-    saveSettings();
+    await saveLorebook(lorebookName, data);
     console.log(lt('ll.923b697892d4f0e5')`[LivingLorebook] Rebuilding metadata [${lorebookName}]: `
         + lt('ll.1016f2459a7a7dcb')`updated ${updated} · new ${seeded} · removed orphaned records ${orphans}`, byCategory);
     return { updated, seeded, orphans, byCategory };
@@ -709,6 +719,7 @@ export async function loadAnyLorebook(name) {
     const loaded = await loadWorldInfo(name);
     if (!loaded) return null;
     const data = structuredClone(loaded);
+    cacheMetadata(name, data);
     _revisions.set(data, { name, json: JSON.stringify(loaded) });
     return data;
 }
@@ -941,6 +952,20 @@ export async function saveLorebook(lorebookName, data) {
             if (!current.ok) throw new Error(l('ll.a495eaa5f53fda6a', "Could not verify the lorebook before saving."));
             if (JSON.stringify(await current.json()) !== rev.json) throw new Error(l('ll.597910b5f58c7633', "The lorebook changed during analysis. Reload it and organize again."));
         }
+        for (const [uid, entry] of Object.entries(data.entries || {})) {
+            const staged = _stagedMetadata.get(data);
+            const patch = staged?.get(String(uid));
+            const previous = embeddedMetadata(entry) || _settings.entryMetadata?.[`${lorebookName}:${uid}`];
+            if (entry.extensions?.livingLorebook && !embeddedMetadata(entry)) throw new Error(l('ll.storage.metadataVersion', 'Unsupported Living Lorebook metadata version.'));
+            if (patch === null) {
+                if (entry.extensions) delete entry.extensions.livingLorebook;
+            } else if (previous || patch) {
+                entry.extensions = { ...entry.extensions, livingLorebook: { version: 1, metadata: { ...previous, ...patch } } };
+            }
+            // Imported original entries may use either numeric or string UIDs.
+            const original = data.originalData?.entries?.find(e => String(e.uid) === String(uid));
+            if (original) setWIOriginalDataValue(data, original.uid, 'extensions.livingLorebook', entry.extensions?.livingLorebook);
+        }
         const response = await fetch('/api/worldinfo/edit', {
             method: 'POST', headers: getRequestHeaders(),
             body: JSON.stringify({ name: lorebookName, data }),
@@ -948,10 +973,9 @@ export async function saveLorebook(lorebookName, data) {
         if (!response.ok) throw new Error(lt('ll.96f5730b6571a56a')`Lorebook save failed (${response.status})`);
         worldInfoCache.set(lorebookName, structuredClone(data));
         _revisions.set(data, { name: lorebookName, json: JSON.stringify(data) });
-        for (const [uid, patch] of (_stagedMetadata.get(data) || [])) {
-            if (patch === null) deleteMetadata(uid, lorebookName);
-            else setMetadata(uid, patch, lorebookName);
-        }
+        for (const uid of Object.keys(data.entries || {})) delete _settings.entryMetadata?.[`${lorebookName}:${uid}`];
+        for (const [uid, patch] of (_stagedMetadata.get(data) || [])) if (patch === null) delete _settings.entryMetadata?.[`${lorebookName}:${uid}`];
+        cacheMetadata(lorebookName, data);
         _stagedMetadata.delete(data);
         delete _settings.vectorIndexByLorebook?.[lorebookName];
         saveSettings();
@@ -1098,4 +1122,34 @@ export async function calculateSelectionStorage() {
         result.total.tokens += tokens;
     }
     return result;
+}
+
+/** One-way migration: archive first; remove only metadata successfully embedded in existing books. */
+export async function migrateLegacyMetadata() {
+    const legacy = _settings.entryMetadata || {};
+    if (!Object.keys(legacy).length) return { migrated: 0, errors: [] };
+    const snapshot = structuredClone(legacy);
+    let backup = _settings.metadataBackupFile;
+    let sameBackup = false;
+    if (typeof backup === 'string' && /^\/user\/files\/livinglorebook-metadata-backup-\d+\.json$/.test(backup)) {
+        try {
+            const response = await fetch(backup, { cache: 'no-store' });
+            if (response.ok) sameBackup = JSON.stringify((await response.json()).entryMetadata) === JSON.stringify(snapshot);
+        } catch { /* Write a new archive if the previous one cannot be verified. */ }
+    }
+    if (!sameBackup) backup = await writeArchive('livinglorebook-metadata-backup-' + Date.now() + '.json', { version: 1, entryMetadata: snapshot });
+    _settings.metadataBackupFile = backup;
+    saveSettings();
+    let migrated = 0;
+    const errors = [];
+    for (const name of (world_names || [])) {
+        if (!Object.keys(snapshot).some(key => key.startsWith(name + ':'))) continue;
+        try {
+            const data = await loadAnyLorebook(name);
+            if (!data) continue;
+            await saveLorebook(name, data);
+            migrated++;
+        } catch (err) { errors.push({ book: name, message: err.message }); }
+    }
+    return { migrated, errors };
 }
