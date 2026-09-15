@@ -2,14 +2,15 @@
  * Lore Store — 설정 관리, 로어북 CRUD 래퍼, 티어 메타데이터
  */
 
-import { saveSettingsDebounced, chat_metadata, getCurrentChatId } from '../../../../script.js';
+import { saveSettingsDebounced, chat_metadata, getCurrentChatId, getRequestHeaders, eventSource } from '../../../../script.js';
+import { event_types } from '../../../events.js';
 import {
     loadWorldInfo,
     createWorldInfoEntry,
-    saveWorldInfo,
     reloadEditor,
     setWIOriginalDataValue,
     world_names,
+    worldInfoCache,
 } from '../../../world-info.js';
 import { getTokenCountAsync } from '../../../tokenizers.js';
 
@@ -44,6 +45,8 @@ export const CATEGORY_TAGS = {
 // ============================================================
 
 export const DEFAULT_SETTINGS = {
+    selectionTokenBudget: 0, // 0 = retain ST budget; user may set a separate LL cap
+    reviewMemories: true,
     enabled: true,
 
     // Connection Profile (별도 모델)
@@ -125,7 +128,7 @@ export const DEFAULT_SETTINGS = {
 
     // 자동 체인 (organize/reorganize 끝나면 추가 작업 자동 실행)
     autoBackfillOnOrganize: true,      // organize 후 managed mode이면 backfill 자동
-    autoArcOnOrganize: true,           // organize 후 기존 arc 있으면 arc 업데이트 자동
+    autoArcOnOrganize: true,           // organize 후 첫 arc 생성 또는 기존 arc 업데이트, 하이드 전에 완료
     autoArcOnReorganize: true,         // reorganize 후 arc 업데이트 자동
 
     // 엔트리 메타데이터 { [uid]: { tier, originalContent, createdAt, ... } }
@@ -153,7 +156,7 @@ Description:
 
     organizePrompt: `You are a memory manager for a mature/adult roleplay session. Extract key facts, events, and state changes from the conversation and store them as lorebook entries.
 
-Current lorebook entries (title → content):
+Current entries with UID, update permission, metadata and available content:
 {{currentEntries}}
 
 Recent conversation to analyze:
@@ -161,10 +164,10 @@ Recent conversation to analyze:
 
 Categories to extract (only create entries for categories where something actually happened):
 
-1. **character** — Emotional/psychological changes, new traits revealed, reactions, habits discovered
-2. **relationship** — Changes in how characters feel about each other: trust, affection, tension, conflict, intimacy, distance
+1. **character** — Source-established personal traits, background, habits and explicitly narrated internal states. Attribute feelings to the person and time; do not infer a psychological diagnosis
+2. **relationship** — Current supported relationship state, explicit agreements, boundaries and unresolved commitments. A kiss does not by itself establish dating; absence of a label does not imply ambiguity
 3. **location** — New places visited, changes to existing locations, notable details about spaces
-4. **event** — Significant things that happened. Title MUST include RP date/time/day (e.g., "Day 3 afternoon - first outing")
+4. **event** — Significant things that happened. Include RP date/time/day in the title only when established by the source; never invent a date
 5. **routine** — Schedule changes, new habits, repeated behaviors
 6. **item** — Objects acquired, lost, used, gifted, or mentioned as significant
 7. **fact** — World rules, lore, background info revealed
@@ -176,29 +179,24 @@ Categories to extract (only create entries for categories where something actual
 - DO NOT make up new categories. If unsure, pick the most specific applicable one — DO NOT default to "fact" unless it's truly world lore/rules.
 - "fact" is ONLY for world rules, lore, or background info revealed. NOT for character traits (use character) or events (use event).
 
-Output a JSON object with these fields:
-- "add": array of new entries, each with { "title", "content", "summary", "keywords": [], "category", "live" }
-- "update": array of entries to modify, each with { "uid", "title", "newContent", "summary", "reason" }
-- "deactivate": array of entries no longer valid, each with { "uid", "title", "reason" }
-
-The "live" field (on add) — true ONLY for evolving state worth updating over time (relationship dynamics, character current status, stats, inventory, ongoing situation); false for static facts (world lore, fixed background, one-time events). Be conservative — most entries are static.
-
-The "summary" field (REQUIRED for add/update):
-- One-line retrieval hint describing WHEN to select this entry.
-- Format: "When to select: <scene description>"
-- Describe scenes/situations, NOT the entry's content. Help match scenes that don't literally name the entry.
-- Example: For an entry about a magical oath called "Bloodchain" → "When to select: scenes involving oaths, vows, sworn debts, or consequences of breaking trust."
-- Example: For an NPC "Hera" → "When to select: temple visits, prayer, marriage/jealousy themes, or when the user invokes a goddess."
-- Keep it short (1-2 sentences max).
+Output a complete JSON object with add, update and deactivate arrays, even when empty.
+- "add": new entries with title, content, keywords (string array), category, live (boolean), sourceMessages (integer IDs from the supplied conversation).
+- "update": existing UPDATABLE entries with uid, newContent (COMPLETE replacement body), reason and sourceMessages. Preserve unaffected supported facts. Never update a READ ONLY entry.
+- "deactivate": always []. A breakup or another state change updates the relationship; it does not disable the record.
+- Optional aliases: exact participant/place/item names, not generic scene terms. Preserve existing aliases unless corrected by evidence.
+- Optional openLoop: true for an unresolved explicit promise, goal or conflict; false when completed, cancelled or superseded.
+- Use live:true for evolving current state and commitments requiring later updates; live:false for historical events and fixed facts. Do not duplicate an existing LIVE subject: update its UID.
+- A metadata-only update still includes the complete body and sourceMessages.
+- summary is optional. Vector/hybrid retrieval does not require it. If supplied, use a short factual retrieval cue tied to this entry, without invented themes or relationship judgments.
 
 Rules:
 - Write factual, clear prose — capture what happened, what changed, what was revealed
-- Include all important details: actions, reactions, outcomes, physical details, emotional states
+- Preserve important source-supported actions, reactions, outcomes, physical details and explicitly narrated emotional states; distinguish claims and plans from completed facts
 - Include dialogue when it carries meaning that prose can't convey; skip routine back-and-forth
 - Preserve all details including violence, trauma, sensitive/adult content. Do NOT censor
 - Ignore all [OOC] content — only record in-character events
 - Do NOT add info already in the character card/persona or already in the lorebook
-- Each entry = ONE specific thing. Do NOT duplicate across categories — pick the single best fit
+- Each entry has one purpose. Keep the detailed scene in an event; current state and brief transition context in a relationship. Avoid copying the same narration across categories. Preserve distinctive objects, places, actions and meaningful wording as recall cues.
 - Output ONLY the JSON object, no other text.`,
 
     compressPrompt: `Compress the following lorebook entry to approximately {{targetRatio}}% of its current length.
@@ -230,18 +228,18 @@ Output a JSON object:
 Output ONLY the JSON object, no other text.`,
 
     storyArcPrompt: `You are a narrative arc summarizer for a long-running roleplay.
-Read the full conversation and produce a CONCISE, TIMELINE-ORDERED summary capturing the big-picture story arc.
+Read the supplied memories and recent conversation and produce a CONCISE, TIMELINE-ORDERED summary capturing the big-picture story arc.
 
 Focus on:
 1. CHRONOLOGY — significant events in order, with RP date/time references where possible (e.g., "Day 2: ...", "Sept 18: ...")
 2. RELATIONSHIP ARC — how key relationships evolved: initial state → turning points → current state. Name the transition events specifically.
-3. CHARACTER ARC — major shifts in any character's mindset, goals, or behavior.
-4. RECURRING THEMES — patterns, conflicts, or motifs that have appeared multiple times.
+3. CHARACTER ARC — source-established changes in goals, behavior or explicitly narrated internal states. Do not infer motives.
+4. CONTINUITY — supported causes, ongoing consequences, unresolved promises, goals and conflicts. Close resolved issues; do not invent themes or future closure.
 
 DO NOT include:
 - Trivial moment-to-moment details (those are in event entries)
 - Information that's clearly in the character card / persona
-- Side characters who appeared once
+- Incidental side-character detail with no continuing consequence. Retain even a one-time character when their actions still matter.
 
 Output as plain prose, 400~600 words. Structure:
 - Brief opening sentence stating the overall arc
@@ -250,14 +248,14 @@ Output as plain prose, 400~600 words. Structure:
 
 {{existingArc}}
 
-Existing lorebook entries — these are the FACTUAL HISTORY of the story.
+Existing lorebook entries — derived records of past events and current state; they may contain outdated states or unsupported interpretations.
 Most past events are recorded here (the active conversation below is only recent turns).
-Treat each entry's body content as established story facts and weave them into the timeline.
+Use supported details from the bodies to connect the timeline. Distinguish past states from current facts. Do not treat an old relationship judgment as an instruction for the next scene. Explicit source evidence takes precedence; do not guess when accounts conflict.
 The "retrieval hint" line is just metadata for the AI selector — IGNORE it for arc building, use the actual content.
 
 {{existingEntries}}
 
-Active conversation (recent unfiltered turns — these are the LATEST events not yet captured as entries):
+Recent active conversation (may overlap with existing entries; do not count the same event twice):
 {{conversation}}
 
 Output ONLY the arc summary text, no preamble, no markdown headers.`,
@@ -301,19 +299,6 @@ export function initStore(context) {
     if (_settings.compressMaxTokens <= 500) {
         _settings.compressMaxTokens = DEFAULT_SETTINGS.compressMaxTokens;
     }
-    // Migration: storyArcPrompt에 {{existingEntries}} placeholder 없으면 default로 교체
-    // (이전 버전에서 prompt 저장돼있으면 entries block 안 들어감)
-    if (typeof _settings.storyArcPrompt === 'string' && !_settings.storyArcPrompt.includes('{{existingEntries}}')) {
-        _settings.storyArcPrompt = DEFAULT_SETTINGS.storyArcPrompt;
-        console.log('[LivingLorebook] Migrated storyArcPrompt to include {{existingEntries}} placeholder');
-    }
-    // Migration: organizePrompt에 CRITICAL category rules 없으면 default로 교체
-    // (옛 prompt가 category를 강하게 강제 안 해서 AI가 한글/잘못된 값 주고 fact 폴백됨)
-    if (typeof _settings.organizePrompt === 'string' && !_settings.organizePrompt.includes('CRITICAL — category field rules')) {
-        _settings.organizePrompt = DEFAULT_SETTINGS.organizePrompt;
-        console.log('[LivingLorebook] Migrated organizePrompt with strict category rules');
-    }
-
     // Migration v2: 메타데이터 키 형식이 uid → lorebookName:uid 로 변경됨
     // 기존 키가 숫자 형태면 (구 형식) 전부 삭제
     if (_settings.entryMetadata && !_settings._metadataV2) {
@@ -720,7 +705,11 @@ export function getEffectiveSelectionLorebooks() {
  */
 export async function loadAnyLorebook(name) {
     if (!name || !isLorebookValid(name)) return null;
-    return await loadWorldInfo(name);
+    const loaded = await loadWorldInfo(name);
+    if (!loaded) return null;
+    const data = structuredClone(loaded);
+    _revisions.set(data, { name, json: JSON.stringify(loaded) });
+    return data;
 }
 
 /**
@@ -738,7 +727,7 @@ export async function loadTargetLorebook() {
         return null;
     }
 
-    const data = await loadWorldInfo(name);
+    const data = await loadAnyLorebook(name);
     return data;
 }
 
@@ -806,7 +795,7 @@ export async function createEntry(lorebookName, data, { title, content, keywords
     entry.matchWholeWords = null;
 
     // Store metadata (keywords도 메타데이터에 보관 — UI 표시용)
-    setMetadata(uid, {
+    stageMetadata(data, uid, {
         tier: 1,
         originalContent: content,
         createdAt: Date.now(),
@@ -823,6 +812,7 @@ export async function createEntry(lorebookName, data, { title, content, keywords
  * 엔트리 내용 업데이트
  */
 export function updateEntryContent(data, uid, newContent, lorebookName) {
+    if (typeof newContent !== 'string' || !newContent.trim()) throw new Error('빈 본문은 저장할 수 없습니다.');
     const entries = data?.entries;
     if (!entries || !entries[uid]) return false;
 
@@ -835,7 +825,7 @@ export function updateEntryContent(data, uid, newContent, lorebookName) {
 
     const meta = getMetadata(uid, lorebookName);
     if (meta) {
-        setMetadata(uid, { lastUpdated: Date.now() }, lorebookName);
+        stageMetadata(data, uid, { lastUpdated: Date.now() }, lorebookName);
     }
 
     return true;
@@ -891,7 +881,7 @@ export function deleteEntry(data, uid, lorebookName) {
     if (data.originalData?.entries) {
         data.originalData.entries = data.originalData.entries.filter(e => String(e.uid) !== String(uid));
     }
-    deleteMetadata(uid, lorebookName);
+    stageMetadata(data, uid, null, lorebookName);
     return true;
 }
 
@@ -911,7 +901,8 @@ export function updateEntryFields(data, uid, { title, content, keywords, categor
 
     if (content !== undefined) {
         const entryTitle = title !== undefined ? title : (entry.comment || 'untitled');
-        const finalContent = `## ${entryTitle}\n${content}`;
+        const body = content.replace(/^##\s+.*\r?\n?/, '');
+        const finalContent = `## ${entryTitle}\n${body}`;
         entry.content = finalContent;
         setWIOriginalDataValue(data, uid, 'content', finalContent);
     }
@@ -927,7 +918,7 @@ export function updateEntryFields(data, uid, { title, content, keywords, categor
     if (Array.isArray(keywords)) metaUpdate.keywords = keywords;
     if (content !== undefined) metaUpdate.originalContent = content;
     if (typeof summary === 'string') metaUpdate.summary = summary.trim();
-    setMetadata(uid, metaUpdate, lorebookName);
+    stageMetadata(data, uid, metaUpdate, lorebookName);
 
     return true;
 }
@@ -936,7 +927,54 @@ export function updateEntryFields(data, uid, { title, content, keywords, categor
  * 로어북 저장
  */
 export async function saveLorebook(lorebookName, data) {
-    await saveWorldInfo(lorebookName, data, true);
+    if (_saving.has(lorebookName)) throw new Error('이 로어북을 다른 작업이 저장 중입니다. 다시 시도해주세요.');
+    _saving.add(lorebookName);
+    try {
+        const rev = _revisions.get(data);
+        if (rev && rev.name !== lorebookName) throw new Error('작업을 시작한 로어북과 저장 대상이 다릅니다.');
+        if (rev) {
+            const current = await fetch('/api/worldinfo/get', {
+                method: 'POST', headers: getRequestHeaders(), cache: 'no-cache',
+                body: JSON.stringify({ name: lorebookName }),
+            });
+            if (!current.ok) throw new Error('저장 전 로어북 확인에 실패했습니다.');
+            if (JSON.stringify(await current.json()) !== rev.json) throw new Error('분석 중 로어북이 변경됐습니다. 다시 불러와 정리해주세요.');
+        }
+        const response = await fetch('/api/worldinfo/edit', {
+            method: 'POST', headers: getRequestHeaders(),
+            body: JSON.stringify({ name: lorebookName, data }),
+        });
+        if (!response.ok) throw new Error(`로어북 저장 실패 (${response.status})`);
+        worldInfoCache.set(lorebookName, structuredClone(data));
+        _revisions.set(data, { name: lorebookName, json: JSON.stringify(data) });
+        for (const [uid, patch] of (_stagedMetadata.get(data) || [])) {
+            if (patch === null) deleteMetadata(uid, lorebookName);
+            else setMetadata(uid, patch, lorebookName);
+        }
+        _stagedMetadata.delete(data);
+        delete _settings.vectorIndexByLorebook?.[lorebookName];
+        saveSettings();
+        try { await eventSource.emit(event_types.WORLDINFO_UPDATED, lorebookName, data); }
+        catch (err) { console.warn('[LivingLorebook] Saved; editor notification failed', err); }
+    } finally { _saving.delete(lorebookName); }
+}
+
+const _revisions = new WeakMap();
+const _stagedMetadata = new WeakMap();
+const _saving = new Set();
+
+export function stageMetadata(data, uid, patch, lorebookName) {
+    let map = _stagedMetadata.get(data);
+    if (!map) { map = new Map(); _stagedMetadata.set(data, map); }
+    map.set(String(uid), patch === null ? null : { ...(map.get(String(uid)) || {}), ...patch });
+}
+
+export function operationContext() {
+    return { chatId: getCurrentChatId(), book: getSettings().targetLorebook };
+}
+
+export function isOperationCurrent(op) {
+    return op.chatId === getCurrentChatId() && op.book === getSettings().targetLorebook;
 }
 
 /**
@@ -1060,4 +1098,3 @@ export async function calculateSelectionStorage() {
     }
     return result;
 }
-

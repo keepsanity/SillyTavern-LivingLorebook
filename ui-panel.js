@@ -10,9 +10,9 @@ import { world_names, createNewWorldInfo } from '../../../world-info.js';
 import { CATEGORIES, escapeHtml, escapeAttr, registerRefreshPanel, populateLorebookDropdown } from './ui-shared.js';
 import {
     getSettings, loadTargetLorebook, getMetadata, CATEGORY_TAGS,
-    calculateSelectionStorage, getEffectiveSelectionLorebooks,
+    calculateSelectionStorage, getEffectiveSelectionLorebooks, operationContext,
 } from './lore-store.js';
-import { getLastInjectionStats } from './summary-retrieval.js';
+import { getLastInjectionStats, getSelectionTrace } from './summary-retrieval.js';
 import { refreshVectorStatus } from './ui-settings.js';
 import { setChatLorebook } from './chat-meta.js';
 import { PANEL_HTML } from './ui-panel-template.js';
@@ -64,8 +64,22 @@ function bindPanelEvents(panel) {
     });
 
     // Toolbar actions
+    const more = panel.querySelector('.ll-more-actions');
+    panel.addEventListener('click', event => {
+        if (!more.contains(event.target)) more.open = false;
+    });
+    panel.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && more.open) {
+            event.preventDefault(); event.stopPropagation(); more.open = false;
+            more.querySelector('summary').focus();
+        }
+    });
     panel.querySelectorAll('.ll-toolbar-btn[data-action]').forEach(btn => {
-        btn.addEventListener('click', () => handleToolbarAction(btn.dataset.action));
+        btn.addEventListener('click', () => {
+            more.open = false;
+            if (more.contains(btn)) more.querySelector('summary').focus();
+            handleToolbarAction(btn.dataset.action);
+        });
     });
 
     // Filter chips
@@ -432,7 +446,7 @@ export async function updateStatusBar() {
     const settings = getSettings();
     // Unprocessed messages
     const chat = SillyTavern.getContext()?.chat || [];
-    const lastIndex = settings.lastOrganizeMessageIndex || 0;
+    const lastIndex = settings.organizeByChat?.[operationContext().chatId]?.index || 0;
     const unprocessed = Math.max(0, chat.length - lastIndex);
 
     const unprocessedEl = document.getElementById('ll_stat_unprocessed');
@@ -494,18 +508,21 @@ function showStorageBreakdown() {
 }
 
 function showInjectBreakdown() {
-    const inj = getLastInjectionStats();
-    if (inj.entryCount === 0) {
-        toastr.info('아직 주입된 엔트리가 없습니다 (또는 AI 선택 OFF).');
-        return;
+    const trace = getSelectionTrace();
+    const dialog = document.createElement('dialog');
+    dialog.className = 'll-memory-review';
+    const heading = document.createElement('h3'); heading.textContent = '기억 선택과 활성 결과'; dialog.append(heading);
+    const info = document.createElement('p');
+    info.textContent = trace.stage + (trace.actual === null ? ' · WI 결과 대기/미확인' : ' · WI 활성 ' + trace.actual.length + '개'); dialog.append(info);
+    const actual = new Set((trace.actual || []).map(e => e.compositeKey));
+    for (const e of trace.entries) {
+        const p = document.createElement('p');
+        p.textContent = e.title + ' · ' + e.tokens + ' tokens · ' + e.reason + (trace.actual === null ? '' : actual.has(e.compositeKey) ? ' · 활성됨' : ' · WI에서 제외됨'); dialog.append(p);
     }
-    const lines = Object.entries(inj.perLorebook).map(([name, s]) =>
-        `📥 ${name}: ${s.count}개 / ${s.tokens.toLocaleString()} 토큰`,
-    );
-    const ts = new Date(inj.timestamp).toLocaleTimeString();
-    const cacheTag = inj.fromCache ? ' (캐시)' : '';
-    toastr.info(lines.join('<br>') + `<br><b>총 ${inj.entryCount}개 / ${inj.totalTokens.toLocaleString()} 토큰</b><br><span style="font-size:10px;opacity:0.7;">갱신: ${ts}${cacheTag}</span>`,
-        '주입 토큰 breakdown', { escapeHtml: false, timeOut: 8000 });
+    for (const e of trace.omitted) { const p = document.createElement('p'); p.textContent = e.title + ' · ' + e.reason; dialog.append(p); }
+    const note = document.createElement('p'); note.textContent = 'WI 활성은 최종 모델 요청 포함과 다를 수 있습니다. ST 예산·슬롯 설정도 적용됩니다.'; dialog.append(note);
+    const close = document.createElement('button'); close.textContent = '닫기'; close.onclick = () => { dialog.close(); dialog.remove(); }; dialog.append(close);
+    dialog.addEventListener('cancel', () => dialog.remove()); document.body.append(dialog); dialog.showModal();
 }
 
 // 다른 UI 모듈이 순환 import 없이 패널을 새로고침할 수 있게 등록 (모듈 로드 시 1회)

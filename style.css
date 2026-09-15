@@ -391,6 +391,51 @@
 .ll-toolbar-btn.reorganize:hover { background: rgba(99, 179, 237, 0.1); border-color: rgba(99, 179, 237, 0.3); color: #90cdf4; }
 
 /* ── Filter Bar ── */
+.ll-main-toolbar {
+    overflow: visible;
+    position: relative;
+    z-index: 5;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.ll-main-toolbar > .organize {
+    background: rgba(104, 211, 145, 0.12);
+    border-color: rgba(104, 211, 145, 0.3);
+}
+.ll-more-actions { position: relative; margin-left: auto; }
+.ll-more-actions > summary {
+    display: flex; align-items: center; gap: 5px;
+    padding: 7px 8px; border-radius: 8px; cursor: pointer;
+    font-size: 12px; list-style: none;
+    color: var(--SmartThemeBodyColor, #ccc);
+}
+.ll-more-actions > summary::-webkit-details-marker { display: none; }
+.ll-more-actions > summary:hover, .ll-more-actions[open] > summary {
+    background: rgba(128, 128, 128, 0.15);
+}
+.ll-more-actions > summary:focus-visible, .ll-main-toolbar button:focus-visible {
+    outline: 2px solid #68d391; outline-offset: 2px;
+}
+.ll-more-list {
+    position: absolute; top: calc(100% + 8px); right: 0;
+    width: 220px; max-width: calc(100vw - 32px); padding: 6px;
+    border: 1px solid var(--SmartThemeBorderColor, #454545);
+    border-radius: 10px;
+    background: var(--SmartThemeBlurTintColor, #25252b);
+    backdrop-filter: blur(24px);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+.ll-more-list .ll-toolbar-btn {
+    width: 100%; border-color: transparent; padding: 10px;
+    text-align: left; white-space: normal;
+}
+.ll-more-divider { height: 1px; margin: 5px; background: var(--SmartThemeBorderColor, #454545); }
+@media (max-width: 480px) {
+    .ll-main-toolbar { padding: 10px 12px; gap: 5px; }
+    .ll-main-toolbar > .ll-toolbar-btn { padding: 8px; }
+    .ll-more-actions > summary > span { display: none; }
+}
+
 .ll-filter-bar {
     display: flex;
     gap: 6px;
@@ -847,6 +892,17 @@
     gap: 6px;
     margin-top: 4px;
 }
+
+.ll-edit-memory-state { padding: 8px 0; display: flex; flex-direction: column; gap: 5px; }
+.ll-entry-edit-form .ll-edit-check {
+    display: flex; align-items: center; gap: 8px; margin: 0;
+    font-size: 12px; line-height: 1.5; cursor: pointer;
+}
+.ll-entry-edit-form .ll-edit-check input[type="checkbox"] {
+    flex: 0 0 16px; width: 16px; height: 16px; min-width: 16px;
+    padding: 0; margin: 0; align-self: center; accent-color: #68d391;
+}
+.ll-edit-hint { font-size: 11px; line-height: 1.5; opacity: 0.65; overflow-wrap: anywhere; }
 
 .ll-edit-actions button {
     padding: 5px 12px;
@@ -1584,3 +1640,15 @@ dialog.ll-range-modal::backdrop {
     0%, 100% { opacity: 0.4; }
     50% { opacity: 0.9; }
 }
+/* Memory review and retrieval explanation share a compact, readable surface. */
+.ll-memory-review { box-sizing: border-box; color: var(--SmartThemeBodyColor, #ddd); background: var(--SmartThemeBlurTintColor, #202124); border: 1px solid var(--SmartThemeBorderColor, #555); border-radius: 12px; width: min(900px, 94vw); max-height: 88vh; padding: 22px; overflow: auto; }
+.ll-memory-review::backdrop { background: #0009; }
+.ll-memory-review h3 { margin: 0 0 12px; }
+.ll-memory-review section { border-top: 1px solid var(--SmartThemeBorderColor, #555); padding: 12px 0; }
+.ll-memory-review pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.5; padding: 10px; background: #80808015; }
+.ll-memory-review .ll-review-before { opacity: .7; }
+.ll-memory-review footer { display: flex; gap: 12px; justify-content: flex-end; position: sticky; bottom: -22px; padding: 12px 0; background: var(--SmartThemeBlurTintColor, #202124); }
+.ll-memory-review button { color: inherit; background: #80808025; border: 1px solid var(--SmartThemeBorderColor, #555); border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+.ll-memory-review button:disabled { opacity: .5; cursor: default; }
+.ll-review-warning { border-left: 3px solid #dba646; padding-left: 10px; }
+.ll-memory-guide { font-size: 12px; line-height: 1.5; opacity: .8; padding: 8px 12px; }

@@ -1,3 +1,4 @@
+import { rankMemories, fitMemoryBudget } from './retrieval-policy.js';
 /**
  * Summary-based Retrieval — 매 generation 직전 AI가 summary 보고 top-N 엔트리 선택
  *
@@ -11,7 +12,7 @@
 
 import { callLLM } from './llm-service.js';
 import {
-    getSettings,
+    getSettings, operationContext, isOperationCurrent,
     saveSettings,
     getMetadata,
     getEffectiveSelectionLorebooks,
@@ -53,9 +54,19 @@ let _lastInjection = {
 
 // 동시 호출 시 같은 Promise 공유 — 중복 LLM 호출 방지
 // (precompute 백그라운드 + onGenerationBeforeWI 동시 호출 케이스)
-let _selectInflight = null;
+const _selectInflight = new Map();
+let _selectionEpoch = 0;
+let _lastTrace = { entries: [], omitted: [], stage: '', actual: null };
+export function getSelectionTrace() { return structuredClone(_lastTrace); }
+export function recordActivatedEntries(entries) {
+    const keys = new Set(entries.map(e => `${e.world}::${e.uid}`));
+    _lastTrace.actual = _lastTrace.entries.filter(e => keys.has(e.compositeKey));
+}
 
 export function clearSelectionCache() {
+    _selectionEpoch++;
+    _lastTrace = { entries: [], omitted: [], stage: '', actual: null };
+    _lastInjection = { totalTokens: 0, entryCount: 0, perLorebook: {}, timestamp: 0, fromCache: false };
     _selectionCache = { chatHash: null, manifestHash: null, selectedKeys: [], timestamp: 0 };
 }
 
@@ -184,34 +195,6 @@ export function getLastInjectionStats() {
  * 선택된 엔트리들의 토큰 수 측정 (비동기) + module 상태 업데이트.
  * 캐시 hit일 땐 token count도 캐시 활용 (마지막 측정값 그대로) — 매번 재계산 안 함.
  */
-async function measureAndStoreInjectionStats(entries, fromCache) {
-    if (fromCache && _lastInjection.entryCount === entries.length) {
-        // 같은 결과 재사용 — 토큰 측정 스킵
-        _lastInjection.fromCache = true;
-        _lastInjection.timestamp = Date.now();
-        return;
-    }
-
-    const perLorebook = {};
-    let total = 0;
-    for (const e of entries) {
-        const tok = await countTokens(e.content || '');
-        total += tok;
-        if (!perLorebook[e.lorebookName]) {
-            perLorebook[e.lorebookName] = { count: 0, tokens: 0 };
-        }
-        perLorebook[e.lorebookName].count++;
-        perLorebook[e.lorebookName].tokens += tok;
-    }
-    _lastInjection = {
-        totalTokens: total,
-        entryCount: entries.length,
-        perLorebook,
-        timestamp: Date.now(),
-        fromCache,
-    };
-}
-
 // ============================================================
 // Public API
 // ============================================================
@@ -223,16 +206,34 @@ async function measureAndStoreInjectionStats(entries, fromCache) {
  * @returns {Promise<{entries: Array<{lorebookName, uid, title, content, category, summary}>, fromCache: boolean, stage: string}>}
  */
 export async function selectEntries(chat) {
-    if (_selectInflight) {
-        console.log(`${LOG_PREFIX} selectEntries: dedup'd (joining inflight call)`);
-        return _selectInflight;
-    }
-    _selectInflight = _selectEntriesImpl(chat);
-    try {
-        return await _selectInflight;
-    } finally {
-        _selectInflight = null;
-    }
+    const op = operationContext();
+    const epoch = _selectionEpoch;
+    const snapshot = structuredClone(chat);
+    const settings = structuredClone(getSettings());
+    const key = JSON.stringify([op, epoch, snapshot.slice(-(settings.selectionScanDepth || 8)), getEffectiveSelectionLorebooks(), settings.selectionEngine]);
+    if (_selectInflight.has(key)) return _selectInflight.get(key);
+    const run = (async () => {
+        if (settings.selectionEngine === 'hybrid') {
+            try { await autoReindexStaleLorebooks(); }
+            catch (err) { console.warn('[LivingLorebook] 재색인 실패; 검색 폴백 사용', err); }
+        }
+        if (epoch !== _selectionEpoch || !isOperationCurrent(op)) return { entries: [], stage: 'stale-discarded', fromCache: false };
+        const result = await _selectEntriesImpl(snapshot);
+        if (epoch !== _selectionEpoch || !isOperationCurrent(op)) return { entries: [], stage: 'stale-discarded', fromCache: false };
+        const fitted = await fitMemoryBudget(result.entries, settings.selectionTokenBudget || 0, countTokens);
+        if (epoch !== _selectionEpoch || !isOperationCurrent(op)) return { entries: [], stage: 'stale-discarded', fromCache: false };
+        const perLorebook = {};
+        for (const e of fitted.entries) {
+            perLorebook[e.lorebookName] ||= { count: 0, tokens: 0 };
+            perLorebook[e.lorebookName].count++;
+            perLorebook[e.lorebookName].tokens += e.tokens;
+        }
+        _lastInjection = { totalTokens: fitted.tokens, entryCount: fitted.entries.length, perLorebook, timestamp: Date.now(), fromCache: result.fromCache };
+        _lastTrace = { entries: fitted.entries.map(e => ({ compositeKey: e.compositeKey, title: e.title, lorebookName: e.lorebookName, reason: e.reason || 'AI 선택', tokens: e.tokens })), omitted: fitted.omitted, stage: result.stage, actual: null };
+        return { ...result, entries: fitted.entries };
+    })();
+    _selectInflight.set(key, run);
+    try { return await run; } finally { _selectInflight.delete(key); }
 }
 
 /**
@@ -253,12 +254,17 @@ export async function injectManagedEntriesIntoWI(lore) {
 
     const books = getEffectiveSelectionLorebooks().filter(name => isManagedMode(name));
     if (books.length === 0) return;
+    const orderByKey = new Map(_lastTrace.entries.map((e, i) => [e.compositeKey, 100000 - i]));
 
     // 이미 ST가 들고 있는 것(사용자가 별도로 바인딩해둔 경우)과 중복 방지
     const seen = new Set();
     for (const arr of [lore.globalLore, lore.characterLore, lore.chatLore, lore.personaLore]) {
         if (!Array.isArray(arr)) continue;
-        for (const e of arr) seen.add(`${e.world}.${e.uid}`);
+        for (let i = 0; i < arr.length; i++) {
+            const e = arr[i];
+            seen.add(`${e.world}.${e.uid}`);
+            if (books.includes(e.world)) arr[i] = { ...e, order: orderByKey.get(`${e.world}::${e.uid}`) ?? e.order, key: [], keysecondary: [], vectorized: false, constant: false };
+        }
     }
 
     let added = 0;
@@ -275,7 +281,7 @@ export async function injectManagedEntriesIntoWI(lore) {
             // (managed 전환은 LL 메타데이터가 있는 엔트리의 키워드만 지운다. 외부에서 추가된 엔트리는
             //  키워드가 살아있어서, ST 순회 대상이 된 지금은 엉뚱한 엔트리가 키워드로 튀어나올 수 있다.)
             // constant(핀)는 그대로 둬서 항상 활성 유지.
-            lore.chatLore.push({ uid: entry.uid ?? uid, world: lbName, ...rest, key: [], keysecondary: [] });
+            lore.chatLore.push({ uid: entry.uid ?? uid, world: lbName, ...rest, order: orderByKey.get(`${lbName}::${entry.uid ?? uid}`) ?? entry.order, key: [], keysecondary: [], vectorized: false, constant: false });
             added++;
         }
     }
@@ -307,7 +313,7 @@ async function collectPinnedEntries() {
                 title: entry.comment || 'untitled',
                 content: entry.content || '',
                 category: getMetadata(uid, lbName)?.category || 'fact',
-                summary: '',
+                summary: '', reason: '고정 기억',
                 rawEntry: entry,
             });
         }
@@ -326,19 +332,17 @@ async function _selectEntriesImpl(chat) {
     const merged = [...pinned.filter(p => !seen.has(p.compositeKey)), ...selected];
 
     // 통계는 병합된 최종 주입분 기준으로 다시 기록 (상태바가 실제 주입량을 말하게)
-    await measureAndStoreInjectionStats(merged, result.fromCache);
     return { ...result, entries: merged, stage: `${result.stage} +pinned${pinned.length}` };
 }
 
 async function _selectCore(chat) {
-    const settings = getSettings();
+    const settings = structuredClone(getSettings());
     const allLorebooks = getEffectiveSelectionLorebooks();
 
     // managed mode인 로어북만 — 그래야 ST 자동 활성화와 이중주입 안 남
     const lorebooks = allLorebooks.filter(name => isManagedMode(name));
 
     if (lorebooks.length === 0) {
-        await measureAndStoreInjectionStats([], false);
         return { entries: [], fromCache: false, stage: allLorebooks.length === 0 ? 'no-lorebooks' : 'no-managed-lorebooks' };
     }
 
@@ -363,13 +367,14 @@ async function _selectCore(chat) {
                 content: entry.content || '',
                 category: meta?.category || 'fact',
                 summary,
-                rawEntry: entry,  // ST WI 시스템에 force-activate 시 통째 전달
+                aliases: Array.isArray(meta?.aliases) ? meta.aliases : [],
+                live: !!meta?.live, openLoop: !!meta?.openLoop,
+                rawEntry: { ...entry, key: entry.key?.length ? entry.key : (meta?.keywords || []) },  // ST WI 시스템에 force-activate 시 통째 전달
             });
         }
     }
 
     if (candidates.length === 0) {
-        await measureAndStoreInjectionStats([], false);
         return { entries: [], fromCache: false, stage: 'no-candidates' };
     }
 
@@ -391,7 +396,6 @@ async function _selectCore(chat) {
     const vectorText = buildRecentQueryText(filtered.slice(-vectorDepth), formatMessages, getEmbedMaxChars());
 
     if (!chatText.trim()) {
-        await measureAndStoreInjectionStats([], false);
         return { entries: [], fromCache: false, stage: 'empty-chat' };
     }
 
@@ -406,23 +410,8 @@ async function _selectCore(chat) {
     // 이하 'ai' 엔진 — manifest 힌트가 필요하므로 summary 있는 후보만 사용
     candidates = candidates.filter(c => c.summary);
     if (candidates.length === 0) {
-        await measureAndStoreInjectionStats([], false);
         return { entries: [], fromCache: false, stage: 'no-candidates-ai (no summaries)' };
     }
-
-    // 슬라이딩 윈도우 캐시 키 — 마지막이 assistant인 경우에만 잘라냄.
-    // → swipe / regen / 답변 직후 precompute 모두 같은 키 생성 → cache hit.
-    let cacheBase = filtered;
-    if (filtered.length > 0) {
-        const last = filtered[filtered.length - 1];
-        if (last && !last.is_user) {
-            cacheBase = filtered.slice(0, -1);
-        }
-    }
-    const chatTextForCache = cacheBase.slice(-scanDepth).map(m => {
-        const name = m.is_user ? 'User' : (m.name || 'Character');
-        return `${name}: ${m.mes}`;
-    }).join('\n') || chatText;
 
     const aiSelectK = settings.aiSelectK || 8;
     const prefilterK = settings.bm25PrefilterK || 30;
@@ -454,20 +443,9 @@ async function _selectCore(chat) {
         }
     }
 
-    // 후보가 K 이하면 AI 호출 스킵
-    if (prefiltered.length <= aiSelectK) {
-        console.log(`${LOG_PREFIX} Selection: ${prefiltered.length} candidates ≤ K=${aiSelectK}, skipping AI`);
-        await measureAndStoreInjectionStats(prefiltered, false);
-        return {
-            entries: prefiltered,
-            fromCache: false,
-            stage: `direct (${prefilterStage})`,
-        };
-    }
-
     // 캐시 체크 — 슬라이딩 윈도우 사용 (마지막 메시지 제외) → 메시지 1개 추가에도 hit
-    const chatHash = getStringHash(chatTextForCache);
-    const manifestSig = prefiltered.map(c => `${c.compositeKey}|${c.summary}`).join('\n');
+    const chatHash = getStringHash(chatText);
+    const manifestSig = prefiltered.map(c => `${c.compositeKey}|${c.title}|${c.content}|${c.summary}`).join('\n');
     const manifestHash = getStringHash(manifestSig + '|K=' + aiSelectK);
 
     if (settings.selectionCacheEnabled !== false &&
@@ -475,9 +453,8 @@ async function _selectCore(chat) {
         _selectionCache.manifestHash === manifestHash) {
         const keySet = new Set(_selectionCache.selectedKeys);
         const cachedEntries = prefiltered.filter(c => keySet.has(c.compositeKey));
-        if (cachedEntries.length > 0) {
+        if (cachedEntries.length >= 0) {
             console.log(`${LOG_PREFIX} Selection cache HIT (${cachedEntries.length} entries)`);
-            await measureAndStoreInjectionStats(cachedEntries, true);
             return { entries: cachedEntries, fromCache: true, stage: 'cache-hit' };
         }
     }
@@ -549,8 +526,8 @@ Maximum ${aiSelectK} entries. Output ONLY the JSON object.`;
         //   { "selected": ["0", "3"] }                       ← string array
         //   { "selected": [{"index": 0}, {"id": 3}] }        ← 다른 키
         //   { "chosen": [...] } / { "entries": [...] }       ← 다른 root key
-        const rawList = parsed.selected ?? parsed.chosen ?? parsed.entries ?? parsed.selection ?? parsed.results ?? [];
-        if (Array.isArray(rawList) && rawList.length > 0) {
+        const rawList = parsed.selected ?? parsed.chosen ?? parsed.entries ?? parsed.selection ?? parsed.results;
+        if (Array.isArray(rawList)) {
             selectedIndices = rawList.map(item => {
                 if (typeof item === 'number') return item;
                 if (typeof item === 'string') {
@@ -568,7 +545,8 @@ Maximum ${aiSelectK} entries. Output ONLY the JSON object.`;
                 return NaN;
             }).filter(i => Number.isInteger(i) && i >= 0 && i < prefiltered.length)
                 .slice(0, aiSelectK);
-            aiCallSucceeded = selectedIndices.length > 0;
+            selectedIndices = [...new Set(selectedIndices)];
+            aiCallSucceeded = rawList.length === 0 || selectedIndices.length > 0;
             if (!aiCallSucceeded) {
                 console.warn(`${LOG_PREFIX} AI response parsed but no valid indices:`, cleaned.substring(0, 300));
             }
@@ -601,20 +579,10 @@ Maximum ${aiSelectK} entries. Output ONLY the JSON object.`;
     if (aiCallSucceeded) {
         selectedEntries = selectedIndices.map(i => prefiltered[i]).filter(Boolean);
         stage = 'ai-select';
-    } else if (_selectionCache.selectedKeys && _selectionCache.selectedKeys.length > 0) {
-        const keySet = new Set(_selectionCache.selectedKeys);
-        selectedEntries = prefiltered.filter(c => keySet.has(c.compositeKey));
-        if (selectedEntries.length === 0) {
-            // 캐시 entry들이 prefiltered에 없음 (다른 lorebook scope) → 슬라이스 폴백
-            selectedEntries = prefiltered.slice(0, aiSelectK);
-            stage = 'fallback-slice';
-        } else {
-            stage = 'fallback-prev-cache';
-            console.log(`${LOG_PREFIX} Using previous cache as fallback (${selectedEntries.length} entries)`);
-        }
     } else {
-        selectedEntries = prefiltered.slice(0, aiSelectK);
-        stage = 'fallback-slice';
+        const fallback = await _selectFast(candidates, { bm25: chatText, vector: vectorText }, settings, lorebooks, 'bm25');
+        selectedEntries = fallback.entries.slice(0, aiSelectK);
+        stage = 'fallback-bm25';
     }
 
     const selectedKeys = selectedEntries.map(e => e.compositeKey);
@@ -630,7 +598,6 @@ Maximum ${aiSelectK} entries. Output ONLY the JSON object.`;
     }
 
     const llmMs = performance.now() - tLlm;
-    await measureAndStoreInjectionStats(selectedEntries, false);
     console.log(`${LOG_PREFIX} Selection: ${selectedEntries.length} chosen from ${prefiltered.length} | bm25 ${bm25Ms.toFixed(0)}ms · llm ${llmMs.toFixed(0)}ms | ${stage}, ${prefilterStage}, ${lorebooks.length} lorebook${lorebooks.length > 1 ? 's' : ''}`);
     return { entries: selectedEntries, fromCache: false, stage: `${stage} (${prefilterStage})` };
 }
@@ -648,7 +615,7 @@ Maximum ${aiSelectK} entries. Output ONLY the JSON object.`;
  * score(entry) = wV/(K + rank_vector) + wB/(K + rank_bm25)
  * 두 목록에 다 오른 엔트리가 자연히 위로 올라온다.
  */
-const RRF_K = 60;
+
 
 
 /** 소스 불일치 경고를 매 생성마다 띄우지 않기 위한 1회 플래그 */
@@ -707,6 +674,12 @@ async function _vectorRanks(candidates, queryText, settings, lorebooks) {
     // 임베딩 소스가 재색인 시점과 다르면 벡터 차원이 안 맞아 검색이 무의미/에러 →
     // 조용히 틀린 결과를 주느니 벡터를 끄고 BM25로만 간다.
     const currentSig = getVectorSourceSignature();
+    for (const book of lorebooks) {
+        const data = await loadAnyLorebook(book);
+        if (settings.vectorIndexByLorebook?.[book] !== lorebookFingerprint(data, currentSig)) {
+            return { ranks: new Map(), ms: 0, note: 'stale-index' };
+        }
+    }
     const indexedSig = settings.vectorIndexSignature;
     if (indexedSig && indexedSig !== currentSig) {
         if (_sigWarned !== currentSig) {
@@ -809,9 +782,9 @@ function matchKeywordEntries(candidates, scanText) {
         }
 
         const lower = k.toLowerCase();
-        // 순수 ASCII 키는 단어경계를 요구 ("River"가 "Rivers"에 안 걸리게).
-        // 한글/CJK엔 단어경계 개념이 없으므로 부분일치 그대로.
-        if (!/[^ -]/.test(k)) {
+        // 순수 ASCII 키는 단어경계를 요구 ("River"가 "Rivers"에 안 걸리게).
+        // 한글/CJK엔 단어경계 개념이 없으므로 부분일치 그대로.
+        if (!/[^\x00-\x7f]/.test(k)) {
             try {
                 const esc = lower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 return new RegExp(`(^|[^\\w])${esc}([^\\w]|$)`, 'i').test(haystack);
@@ -827,7 +800,7 @@ function matchKeywordEntries(candidates, scanText) {
         if (!keys.some(testKey)) continue;
 
         const sec = Array.isArray(e.keysecondary) ? e.keysecondary.filter(k => String(k || '').trim()) : [];
-        if (sec.length > 0) {
+        if (e.selective && sec.length > 0) {
             const matched = sec.filter(testKey).length;
             const logic = Number(e.selectiveLogic) || 0;   // AND_ANY=0, NOT_ALL=1, NOT_ANY=2, AND_ALL=3
             const ok = logic === 1 ? matched < sec.length
@@ -849,175 +822,17 @@ function perBookLabel(entries, lorebooks) {
 }
 
 async function _selectFast(candidates, queries, settings, lorebooks, engine) {
-    const maxK = settings.vectorSelectMaxK || 12;
-
-    // 엔트리 키워드가 대화에 그대로 나왔는지 — 아래 컷오프 면제에 쓴다.
-    const kwOn = settings.keywordMatchEnabled !== false;
-    const kwHits = kwOn ? matchKeywordEntries(candidates, queries.bm25) : new Set();
-    // 0이면 컷오프 끔(기본) — RRF 점수는 순위 기반이라 절대 유사도처럼 해석되지 않음.
-    // 올리면 1등 대비 낮은 꼬리를 잘라낸다.
-    const ratio = typeof settings.vectorCutoffRatio === 'number' ? settings.vectorCutoffRatio : 0;
-    const wV = typeof settings.hybridVectorWeight === 'number' ? settings.hybridVectorWeight : 1;
-    const wB = typeof settings.hybridBm25Weight === 'number' ? settings.hybridBm25Weight : 1;
-
-    const wantVector = engine !== 'bm25';
-    const wantBm25 = engine !== 'vector';
-
-    // --- 1. 벡터 순위 ---
-    let vRanks = new Map();
-    let vecMs = 0;
-    let vecNote = '';
-    let vecThreshold = null;
-    if (wantVector) {
-        const r = await _vectorRanks(candidates, queries.vector, settings, lorebooks);
-        vRanks = r.ranks;
-        vecMs = r.ms;
-        vecNote = r.note;
-        vecThreshold = r.threshold;
-    }
-
-    // --- 2. BM25 순위 ---
-    // 벡터가 비어도 BM25는 돌린다 — 키워드가 걸린 엔트리의 순서를 매기는 데 쓰인다.
-    // (다만 아래 5단계에서 보듯, 벡터 무응답 턴에 BM25가 상한을 채우는 건 허용하지 않는다.)
-    const bm25Needed = wantBm25 || vRanks.size === 0;
-    let bRanks = new Map();
-    const bScores = new Map();   // 원점수 — 단독 모드에서 컷오프에 쓴다 (아래 참고)
-    let bmMs = 0;
-    if (bm25Needed) {
-        const t0 = performance.now();
-        const ranker = buildCandidateRanker(candidates);
-        // 융합 전이므로 maxK보다 넉넉히 뽑아둔다 (벡터가 못 본 걸 BM25가 끌어올릴 여지)
-        let ranked = ranker.search(queries.bm25, Math.max(maxK * 3, settings.bm25PrefilterK || 30));
-
-        // 관련도 바닥선 — BM25는 "쿼리 단어가 하나라도 겹치면 score>0"이라 통과시킨다.
-        // 채팅 20개를 쿼리로 쓰면 흔한 단어 하나만 걸려도 전 엔트리가 후보가 되고,
-        // 그러면 maxK가 유일한 필터라 매 턴 상한을 무의미하게 꽉 채운다(무관한 인물 로어까지).
-        // 1등 점수 대비 비율로 꼬리를 잘라 "진짜 겹치는 것"만 남긴다. 0이면 끔(옛 동작).
-        const floorRatio = typeof settings.bm25MinScoreRatio === 'number' ? settings.bm25MinScoreRatio : 0.35;
-        if (floorRatio > 0 && ranked.length > 0) {
-            const cut = ranked[0].score * floorRatio;
-            const kept = ranked.filter(r => r.score >= cut);
-            if (kept.length > 0) {
-                if (kept.length < ranked.length) {
-                    console.log(`${LOG_PREFIX} BM25 바닥선 ${floorRatio}: ${ranked.length} → ${kept.length}개 (컷 ${cut.toFixed(3)})`);
-                }
-                ranked = kept;
-            }
-        }
-        ranked.forEach((r, i) => {
-            bRanks.set(r.entry.compositeKey, i + 1);
-            bScores.set(r.entry.compositeKey, r.score);
-        });
-        bmMs = performance.now() - t0;
-    }
-
-    if (vRanks.size === 0 && bRanks.size === 0) {
-        await measureAndStoreInjectionStats([], false);
-        const why = wantVector && vecNote ? vecNote : 'no-match';
-        console.warn(`${LOG_PREFIX} Fast(${engine}): 매칭 0개 (${why})`);
-        return { entries: [], fromCache: false, stage: `${engine}-empty (${why})` };
-    }
-
-    // --- 3. RRF 융합 ---
-    const byKey = new Map(candidates.map(c => [c.compositeKey, c]));
-    const fused = new Map(); // key → { candidate, score, v, b }
-    const add = (key, rank, weight, which) => {
-        const cand = byKey.get(key);
-        if (!cand) return;
-        const cur = fused.get(key) || { candidate: cand, score: 0, v: null, b: null };
-        cur.score += weight / (RRF_K + rank);
-        cur[which] = rank;
-        fused.set(key, cur);
-    };
-    for (const [key, rank] of vRanks) add(key, rank, wV, 'v');
-    for (const [key, rank] of bRanks) add(key, rank, wB, 'b');
-
-    const scored = [...fused.values()].sort((a, b) => b.score - a.score);
-
-    // --- 4. 컷오프 판단 ---
-    // 키워드 직격(kwHits)은 위에서 계산해뒀다. 상대 컷오프에서 **면제**만 해준다.
-    // 앞자리로 밀어주지는 않는다 — 실제 로어북 키워드엔 일상어가 섞여 있어서,
-    // 우선순위까지 주면 매 턴 그것들이 상한을 다 차지한다.
-
-    // 하이브리드에서 벡터가 0개인 건 **고장이 아니라 "의미상 가까운 게 없다"는 답**이다.
-    // 실측(nomic-embed-text): 관련 있는 턴은 0.69~0.75, 무관한 턴은 전 항목이 0.58 이하.
-    // 그런데 그때 BM25 순위로 상한을 채우면 그 장면과 무관한 엔트리가 그대로 들어간다
-    // (인물 프로필 47개 로어북에서 BM25 1등 64.9 ↔ 12등 40.8로 분포가 평평해 컷오프가 무력).
-    // 이 턴에 믿을 수 있는 근거는 키워드가 실제로 등장한 엔트리뿐이다. 없으면 0개가 맞다.
-    const vectorSilent = wantVector && vRanks.size === 0;
-    if (vectorSilent) {
-        // ⚠️ scored(=BM25 상위 + 바닥선 통과분)에서만 고르면 안 된다.
-        // 이름은 나왔는데 BM25 점수가 낮은 엔트리가 통째로 빠진다 — 키워드 직격을 넣은 이유 자체가 그거다.
-        // 그래서 후보 전체에서 키워드 일치분을 모으고, 순서만 BM25 점수로 매긴다.
-        const scoreOf = c => bScores.get(c.compositeKey) ?? -1;
-        const evidence = candidates
-            .filter(c => kwHits.has(c.compositeKey))
-            .sort((a, b) => scoreOf(b) - scoreOf(a))
-            .slice(0, maxK);
-
-        await measureAndStoreInjectionStats(evidence, false);
-        console.log(
-            `${LOG_PREFIX} ${engine}(벡터 무응답 ${vecNote ? '— ' + vecNote : ''}): `
-            + `${evidence.length} kept — 키워드 근거 있는 것만 (bm25 ${bRanks.size}, 키워드 ${kwHits.size}, maxK ${maxK}) `
-            + `bm25 ${bmMs.toFixed(0)}ms/${queries.bm25.length}자`
-            + (evidence.length > 0 ? `, [${perBookLabel(evidence, lorebooks)}]` : ''),
-        );
-        return {
-            entries: evidence,
-            fromCache: false,
-            stage: `${engine}-벡터무응답 (${evidence.length}/${scored.length})`,
-        };
-    }
-
-    // --- 5. 컷오프 + 상한 ---
-    // 'bm25' 엔진(벡터 미사용)에선 RRF 점수에 컷오프를 걸어봐야 아무것도 안 잘린다.
-    // 단일 엔진 RRF는 1/(60+순위)라 1위 대비 12위가 85%다 → ratio 0.6은 42위 밑에서야 작동.
-    // 그래서 순위 대신 **BM25 원점수**에 같은 비율을 적용한다.
-    const soloBm25 = vRanks.size === 0 && bScores.size > 0;
-    let kept = scored;                       // scored는 이미 점수 내림차순
-    if (ratio > 0) {
-        if (soloBm25) {
-            const top = Math.max(...bScores.values());
-            const cutoff = top * ratio;
-            kept = scored.filter(s => (bScores.get(s.candidate.compositeKey) ?? 0) >= cutoff
-                || kwHits.has(s.candidate.compositeKey));
-            if (kept.length < scored.length) {
-                console.log(`${LOG_PREFIX} BM25 단독 컷오프 ${ratio} (원점수 기준): `
-                    + `${scored.length} → ${kept.length}개 (1등 ${top.toFixed(2)}, 컷 ${cutoff.toFixed(2)})`);
-            }
-        } else {
-            const cutoff = scored[0].score * ratio;
-            kept = scored.filter(s => s.score >= cutoff || kwHits.has(s.candidate.compositeKey));
-        }
-    }
-
-    // 두 엔진 어디에도 안 잡혔는데 키워드만 맞는 엔트리 — 융합 결과에 없으니 따로,
-    // 그리고 **맨 뒤에** 붙인다 (점수 근거가 0이므로 남는 자리에만).
-    if (kwHits.size > 0) {
-        const inFused = new Set(scored.map(s => s.candidate.compositeKey));
-        const orphans = candidates.filter(c => kwHits.has(c.compositeKey) && !inFused.has(c.compositeKey));
-        if (orphans.length > 0) {
-            kept = [...kept, ...orphans.map(c => ({ candidate: c, score: 0, v: null, b: null }))];
-        }
-    }
-
-    kept = kept.slice(0, maxK);
-    if (kept.length === 0) kept = scored.slice(0, 1); // 안전망: 최소 1개
-
-    const entries = kept.map(s => s.candidate);
-    await measureAndStoreInjectionStats(entries, false);
-
-    const both = kept.filter(s => s.v != null && s.b != null).length;
-    const label = engine;   // 벡터 무응답은 위에서 따로 반환하므로 여기선 항상 정상 경로다
-    console.log(
-        `${LOG_PREFIX} ${label}: ${entries.length} kept / ${scored.length} fused ` +
-        `(vector ${vRanks.size}${vecThreshold != null ? `@${vecThreshold}` : ''}, bm25 ${bRanks.size}, ` +
-        `양쪽 ${both}, maxK ${maxK}${ratio > 0 ? `, ratio ${ratio}` : ''}` +
-        `${kwHits.size > 0 ? `, 키워드 ${kwHits.size}` : ''}) ` +
-        `${vecMs > 0 ? `vec ${vecMs.toFixed(0)}ms/${queries.vector.length}자 · ` : ''}bm25 ${bmMs.toFixed(0)}ms/${queries.bm25.length}자, ` +
-        `[${perBookLabel(entries, lorebooks)}]`,
-    );
-    return { entries, fromCache: false, stage: `${label} (${entries.length}/${scored.length})` };
+    const maxK = Math.max(1, settings.vectorSelectMaxK || 12);
+    const kwHits = settings.keywordMatchEnabled !== false ? matchKeywordEntries(candidates, queries.bm25) : new Set();
+    const vector = engine === 'bm25' ? { ranks: new Map(), note: 'bm25-only' }
+        : await _vectorRanks(candidates, queries.vector, settings, lorebooks);
+    const ranked = buildCandidateRanker(candidates).search(queries.bm25, Math.max(maxK * 3, settings.bm25PrefilterK || 30));
+    const ordered = rankMemories(candidates, {
+        vectorRanks: vector.ranks, bm25Results: ranked, keywordHits: kwHits, text: queries.bm25, recentText: queries.vector, settings,
+        vectorUnavailable: engine === 'bm25' || vector.note === 'source-changed' || vector.note === 'query 실패' || vector.note === 'stale-index',
+    });
+    return { entries: ordered.slice(0, maxK), fromCache: false,
+        stage: engine + (vector.note ? ' · ' + vector.note : '') + ' · 인물/연속성 우선' };
 }
 
 /**
@@ -1032,7 +847,7 @@ function lorebookFingerprint(data, embedderSig) {
     for (const [uid, entry] of Object.entries(data?.entries || {})) {
         if (entry.disable || entry.constant) continue;
         count++;
-        acc = (acc * 31 + getStringHash(`${uid}:${entry.content || ''}`)) | 0;
+        acc = (acc * 31 + getStringHash(`${uid}:${entry.comment || ''}:${entry.content || ''}`)) | 0;
     }
     return `${embedderSig}|${count}|${acc}`;
 }
@@ -1043,7 +858,14 @@ function lorebookFingerprint(data, embedderSig) {
  * @param {{data?: object, fingerprint?: string}} [opts] - 이미 로드/계산했으면 재사용(중복 로드 회피)
  * @returns {Promise<number>} 실제 색인된 엔트리 수
  */
+const reindexJobs = new Map();
 async function reindexOneLorebook(lbName, opts = {}) {
+    if (reindexJobs.has(lbName)) return reindexJobs.get(lbName);
+    const job = reindexOneImpl(lbName, opts);
+    reindexJobs.set(lbName, job);
+    try { return await job; } finally { reindexJobs.delete(lbName); }
+}
+async function reindexOneImpl(lbName, opts = {}) {
     const data = opts.data || await loadAnyLorebook(lbName);
     if (!data || !data.entries) return 0;
     const entries = [];

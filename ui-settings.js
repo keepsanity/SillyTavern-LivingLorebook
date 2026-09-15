@@ -121,6 +121,12 @@ export function bindSettingsInputs(panel) {
         if (lbl) lbl.textContent = ENGINE_SHORT[engine] || engine;
     }
 
+    bind('#ll_s_memory_budget', 'selectionTokenBudget', v => Math.max(0, Number(v) || 0));
+    const reviewEl = panel.querySelector('#ll_s_review_memories');
+    if (reviewEl) {
+        reviewEl.checked = settings.reviewMemories !== false;
+        reviewEl.addEventListener('change', () => { settings.reviewMemories = reviewEl.checked; saveSettings(); });
+    }
     bind('#ll_s_position', 'entryPosition');
     bind('#ll_s_hide_depth', 'hideAfterOrganizeDepth');
 
@@ -353,7 +359,7 @@ export function bindSettingsInputs(panel) {
             settings.keywordMatchEnabled = kwEl.checked;
             saveSettings();
             clearSelectionCache();
-            toastr.info(kwEl.checked ? '키워드 직격 ON — 키워드 일치 시 컷오프 면제' : '키워드 직격 OFF — 점수만으로 선택');
+            toastr.info(kwEl.checked ? '키워드 ON — 인물 이름 우선 확보, 사건 키워드 보완' : '키워드 OFF — 의미·단어 검색으로 선택');
         });
     }
 

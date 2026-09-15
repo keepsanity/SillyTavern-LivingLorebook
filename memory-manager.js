@@ -1,344 +1,22 @@
+import { operationContext, isOperationCurrent } from './lore-store.js';
+import { MEMORY_POLICY, ARC_POLICY } from './memory-policy.js';
 /**
  * Memory Manager — 기억 정리(organize)와 압축(compress)
  */
 
 import { callLLM } from './llm-service.js';
 import {
-    getSettings, saveSettings,
-    loadTargetLorebook, loadAnyLorebook, saveLorebook, refreshEditor,
-    createEntry, updateEntryContent, deactivateEntry, setEntryPinned,
-    getMetadata, setMetadata,
+    getSettings,
+    loadAnyLorebook, saveLorebook, refreshEditor,
+    createEntry, updateEntryContent, setEntryPinned,
+    getMetadata, stageMetadata,
     countTokens, isManagedMode,
 } from './lore-store.js';
 import { insertEntries, deleteEntries, getCollectionId, getEntryHash } from './vector-service.js';
 
 const LOG_PREFIX = '[LivingLorebook]';
 
-// 유효 카테고리 + 한글 매핑 + 흔한 잘못된 값 매핑
-const VALID_CATEGORIES = new Set([
-    'character', 'relationship', 'location', 'event', 'routine', 'item', 'fact',
-]);
-const CATEGORY_ALIASES = {
-    // 한글
-    '캐릭터': 'character', '인물': 'character', '캐릭': 'character',
-    '관계': 'relationship', '관계성': 'relationship',
-    '장소': 'location', '위치': 'location', '공간': 'location',
-    '사건': 'event', '이벤트': 'event', '사고': 'event',
-    '일상': 'routine', '루틴': 'routine', '습관': 'routine',
-    '아이템': 'item', '물건': 'item', '소품': 'item',
-    '설정': 'fact', '사실': 'fact', '정보': 'fact', '배경': 'fact', '룰': 'fact',
-    // 영어 변형
-    'characters': 'character', 'char': 'character', 'person': 'character', 'people': 'character',
-    'relationships': 'relationship', 'rel': 'relationship',
-    'locations': 'location', 'place': 'location', 'places': 'location', 'setting': 'location',
-    'events': 'event', 'scene': 'event', 'moment': 'event',
-    'routines': 'routine', 'habit': 'routine', 'habits': 'routine',
-    'items': 'item', 'object': 'item', 'objects': 'item',
-    'facts': 'fact', 'info': 'fact', 'information': 'fact', 'background': 'fact', 'lore': 'fact', 'rule': 'fact', 'rules': 'fact',
-};
-
-/**
- * AI가 준 category 값을 유효한 영어 카테고리로 정규화.
- * 1) 이미 유효하면 그대로
- * 2) alias 매핑 (한글, 변형)
- * 3) title 휴리스틱 (시간 단서 → event)
- * 4) fact 폴백 + 경고
- */
-function normalizeCategory(item) {
-    const raw = (item.category || '').toString().toLowerCase().trim();
-    if (VALID_CATEGORIES.has(raw)) return raw;
-
-    // alias 매핑 (원본 + 소문자 둘 다 시도)
-    const aliasMatch = CATEGORY_ALIASES[item.category] || CATEGORY_ALIASES[raw];
-    if (aliasMatch) return aliasMatch;
-
-    // title 휴리스틱
-    const title = (item.title || '').toLowerCase();
-    if (/day\s*\d|saturday|sunday|monday|tuesday|wednesday|thursday|friday|\d\s*(am|pm)|\d:\d|오전|오후|월요일|화요일|수요일|목요일|금요일|토요일|일요일|첫|처음|^event\b/.test(title)) {
-        console.warn(`${LOG_PREFIX} Category "${item.category}" invalid → inferred 'event' from title "${item.title}"`);
-        return 'event';
-    }
-
-    console.warn(`${LOG_PREFIX} Category "${item.category}" invalid for title "${item.title}" → defaulting to 'fact'`);
-    return 'fact';
-}
-
-// ============================================================
-// Organize — 대화 분석 후 로어북 갱신
-// ============================================================
-
-/**
- * 기억 정리 실행
- * @param {object[]} chat - 현재 채팅 배열
- * @param {string} characterContext - 캐릭터 카드 + 페르소나
- * @param {object} options - { rangeStart?, rangeEnd? } (inclusive, message index)
- * @returns {Promise<{added: number, updated: number, deactivated: number, processedRange: [number, number]}>}
- */
-export async function organize(chat, characterContext = '', options = {}) {
-    const settings = getSettings();
-
-    if (!settings.targetLorebook) {
-        throw new Error('대상 로어북을 먼저 선택해주세요.');
-    }
-
-    const data = await loadTargetLorebook();
-    if (!data) {
-        throw new Error('로어북을 로드할 수 없습니다.');
-    }
-
-    // 범위 지정 (없으면 전체)
-    const startIdx = Number.isInteger(options.rangeStart) ? Math.max(0, options.rangeStart) : 0;
-    const endIdx = Number.isInteger(options.rangeEnd) ? Math.min(chat.length - 1, options.rangeEnd) : chat.length - 1;
-
-    // 해당 범위의 하이드 안 된 메시지만 추출
-    const recentMessages = [];
-    const processedIndices = [];
-    for (let i = startIdx; i <= endIdx; i++) {
-        const m = chat[i];
-        if (!m || m.is_system || m.is_hidden) continue;
-        recentMessages.push(m);
-        processedIndices.push(i);
-    }
-
-    if (recentMessages.length === 0) {
-        return { added: 0, updated: 0, deactivated: 0, processedRange: [startIdx, endIdx] };
-    }
-
-    // 현재 엔트리 목록 생성 — "업데이트 대상(live)" 플래그된 것만 풀 내용,
-    // 나머지는 제목만 보낸다 (풀 로어북 전송 토큰 부담 제거 + 중복 방지는 제목으로 유지).
-    const liveLines = [];
-    const staticLines = [];
-    const liveUids = new Set();
-    for (const [uid, entry] of Object.entries(data.entries || {})) {
-        if (entry.disable) continue;
-        const meta = getMetadata(uid, settings.targetLorebook);
-        const title = entry.comment || 'untitled';
-        if (meta?.live) {
-            liveUids.add(String(uid));
-            liveLines.push(`[uid:${uid}] ${title}: ${entry.content}`);
-        } else {
-            staticLines.push(`[uid:${uid}] ${title}`);
-        }
-    }
-    const currentEntriesBlock =
-        `=== UPDATABLE entries (you MAY "update" or "deactivate" these; full content shown) ===\n`
-        + (liveLines.join('\n') || '(none flagged as updatable)')
-        + `\n\n=== EXISTING entries (titles only — de-dup reference ONLY; never "update"/"deactivate"/re-"add" these) ===\n`
-        + (staticLines.join('\n') || '(none)');
-
-    // 대화 텍스트 구성
-    const conversationText = recentMessages.map(m => {
-        const name = m.is_user ? 'User' : (m.name || 'Character');
-        return `${name}: ${m.mes}`;
-    }).join('\n');
-
-    // LLM 호출
-    const charInfoBlock = characterContext
-        ? `\n\nThe following character/persona info is ALREADY in the prompt — do NOT create lorebook entries for any of this:\n---\n${characterContext}\n---`
-        : '';
-
-    const systemPrompt = `You are a memory manager for mature/adult roleplay. Output ONLY valid JSON. No markdown fences, no explanations.
-
-CRITICAL rules for the entry list (it has TWO sections):
-- "update" and "deactivate" are allowed ONLY for entries in the "UPDATABLE entries" section (use their uid). NEVER "update" or "deactivate" an entry from the "EXISTING entries (titles only)" section — you only see their titles, so you cannot judge them.
-- Before "add"ing ANY new entry, check BOTH sections AND the character/persona info below — if similar info already exists anywhere, do NOT "add" a duplicate.
-- The character card/persona info is already in the prompt — do NOT create entries for it.
-
-For each "add", include a boolean "live" field:
-- live:true ONLY when the entry is EVOLVING STATE that will keep changing and is worth updating over time — e.g. a relationship's current dynamic, a character's current status/condition/mood, stats, inventory, an ongoing situation/quest.
-- live:false for STATIC facts — world lore, fixed background, a one-time past event, a place description.
-- Be conservative: MOST entries are static (false). Only flag the few that genuinely need ongoing updates.${charInfoBlock}`;
-    const userPrompt = settings.organizePrompt
-        .replace('{{currentEntries}}', currentEntriesBlock)
-        .replace('{{conversation}}', conversationText);
-
-    console.log(`${LOG_PREFIX} Organizing memories (${recentMessages.length} messages)...`);
-
-    const response = await callLLM(systemPrompt, userPrompt, settings.organizeMaxTokens, settings);
-
-    // Parse response (handle truncated JSON)
-    let instructions;
-    try {
-        const cleaned = response.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '').trim();
-        instructions = JSON.parse(cleaned);
-    } catch (e) {
-        // 잘린 JSON 복구 시도
-        instructions = salvageTruncatedObject(response);
-        if (!instructions) {
-            console.error(`${LOG_PREFIX} Failed to parse organize response:`, response);
-            throw new Error('AI 응답을 파싱할 수 없습니다. 다시 시도해주세요.');
-        }
-        console.warn(`${LOG_PREFIX} Organize response was truncated — salvaged partial result`);
-    }
-
-    const result = { added: 0, updated: 0, deactivated: 0 };
-    const collectionId = getCollectionId(settings.targetLorebook);
-    const newVectorEntries = [];
-    const deleteHashes = [];
-
-    // 1. 새 엔트리 추가
-    if (Array.isArray(instructions.add)) {
-        for (const item of instructions.add) {
-            const normalizedCat = normalizeCategory(item);
-            const entry = await createEntry(settings.targetLorebook, data, {
-                title: item.title || 'untitled',
-                content: item.content || '',
-                keywords: item.keywords || [item.title],
-                category: normalizedCat,
-                summary: typeof item.summary === 'string' ? item.summary : '',
-            });
-            if (entry) {
-                result.added++;
-                // AI가 "계속 변할 상태"로 판단한 엔트리는 LIVE(업데이트 대상)로 자동 지정.
-                // 사용자는 카드의 🔄 버튼으로 언제든 끄고 켤 수 있음(추천이지 강제 아님).
-                if (item.live === true) {
-                    setMetadata(String(entry.uid), { live: true }, settings.targetLorebook);
-                }
-                newVectorEntries.push({
-                    uid: String(entry.uid),
-                    title: item.title,
-                    content: item.content,
-                    comment: item.title,
-                });
-            }
-        }
-    }
-
-    // 2. 엔트리 수정
-    if (Array.isArray(instructions.update)) {
-        for (const item of instructions.update) {
-            const uid = String(item.uid);
-            const entry = data.entries?.[uid];
-            if (!entry) continue;
-            // "업데이트 대상" 플래그된 엔트리만 수정 허용 — AI가 static 엔트리 update를 반환해도 무시.
-            // (static은 제목만 보냈으니 온전히 못 고침 + 사용자가 고정으로 둔 것)
-            if (!liveUids.has(uid)) {
-                console.log(`${LOG_PREFIX} update 무시: uid=${uid} 는 업데이트 대상 아님(static)`);
-                continue;
-            }
-
-            // 기존 벡터 삭제
-            deleteHashes.push(getEntryHash(uid, entry.content));
-
-            // 원본 보존
-            const meta = getMetadata(uid, settings.targetLorebook);
-            if (meta && !meta.originalContent) {
-                setMetadata(uid, { originalContent: entry.content }, settings.targetLorebook);
-            }
-
-            updateEntryContent(data, uid, item.newContent, settings.targetLorebook);
-            const updateMeta = { lastUpdated: Date.now() };
-            if (typeof item.summary === 'string' && item.summary.trim()) {
-                updateMeta.summary = item.summary.trim();
-            }
-            setMetadata(uid, updateMeta, settings.targetLorebook);
-
-            // 새 벡터 추가
-            newVectorEntries.push({
-                uid: uid,
-                title: entry.comment || item.title,
-                content: item.newContent,
-                comment: entry.comment || item.title,
-            });
-
-            result.updated++;
-            console.log(`${LOG_PREFIX} Updated "${entry.comment}": ${item.reason}`);
-        }
-    }
-
-    // 3. 엔트리 비활성화
-    if (Array.isArray(instructions.deactivate)) {
-        for (const item of instructions.deactivate) {
-            const uid = String(item.uid);
-            // update와 동일 정책: LIVE(업데이트 대상)만 AI가 건드릴 수 있다.
-            // static 엔트리는 제목만 보냈으므로 "더 이상 유효하지 않음"을 제목만으로 판단하게 두면 오판 위험.
-            if (!liveUids.has(uid)) {
-                console.log(`${LOG_PREFIX} deactivate 무시: uid=${uid} 는 업데이트 대상 아님(static)`);
-                continue;
-            }
-            if (deactivateEntry(data, uid)) {
-                deleteHashes.push(getEntryHash(uid, data.entries[uid]?.content || ''));
-                result.deactivated++;
-                console.log(`${LOG_PREFIX} Deactivated "${item.title}": ${item.reason}`);
-            }
-        }
-    }
-
-    // 저장
-    await saveLorebook(settings.targetLorebook, data);
-    refreshEditor();
-
-    // 벡터 업데이트
-    try {
-        if (deleteHashes.length > 0) {
-            await deleteEntries(collectionId, deleteHashes);
-        }
-        if (newVectorEntries.length > 0) {
-            await insertEntries(collectionId, newVectorEntries);
-        }
-    } catch (err) {
-        console.warn(`${LOG_PREFIX} Vector update failed (non-critical):`, err);
-    }
-
-    // 상태 업데이트
-    settings.lastOrganizeMessageIndex = chat.length;
-    settings.lastOrganizeTimestamp = Date.now();
-    saveSettings();
-
-    console.log(`${LOG_PREFIX} Organize complete: +${result.added} ~${result.updated} -${result.deactivated}`);
-
-    // ============================================================
-    // 자동 체인: organize 후 backfill / arc 자동 실행
-    // 실패해도 organize 본체는 성공으로 처리. 토스트로 알림.
-    // ============================================================
-    const chainResult = { backfilled: 0, arcUpdated: false, errors: [] };
-
-    // 1. backfill 자동 — managed mode targetLorebook이고 새 entries 있을 때
-    if (settings.autoBackfillOnOrganize && result.added > 0 && isManagedMode(settings.targetLorebook)) {
-        try {
-            console.log(`${LOG_PREFIX} Auto-chain: backfill for new entries...`);
-            const bfResult = await backfillSummaries({ lorebookName: settings.targetLorebook });
-            chainResult.backfilled = bfResult.filled;
-            console.log(`${LOG_PREFIX} Auto-chain: backfill ${bfResult.filled}/${bfResult.total} filled`);
-        } catch (err) {
-            console.warn(`${LOG_PREFIX} Auto-chain backfill failed:`, err.message);
-            chainResult.errors.push(`backfill: ${err.message}`);
-        }
-    }
-
-    // 2. arc 업데이트 자동 — 기존 arc entry 있을 때만
-    if (settings.autoArcOnOrganize) {
-        try {
-            // 기존 arc entry 확인
-            const freshData = await loadTargetLorebook();
-            let hasArc = false;
-            for (const [uid, entry] of Object.entries(freshData?.entries || {})) {
-                if (entry.disable) continue;
-                const meta = getMetadata(uid, settings.targetLorebook);
-                if (meta?.category === 'arc') {
-                    hasArc = true;
-                    break;
-                }
-            }
-            if (hasArc) {
-                console.log(`${LOG_PREFIX} Auto-chain: updating story arc...`);
-                await generateStoryArc();
-                chainResult.arcUpdated = true;
-                console.log(`${LOG_PREFIX} Auto-chain: arc updated`);
-            }
-        } catch (err) {
-            console.warn(`${LOG_PREFIX} Auto-chain arc update failed:`, err.message);
-            chainResult.errors.push(`arc: ${err.message}`);
-        }
-    }
-
-    return {
-        ...result,
-        processedRange: [startIdx, endIdx],
-        processedIndices,
-        chain: chainResult,
-    };
-}
+export { organizeMemories as organize } from './organize-memory.js';
 
 // ============================================================
 // Compress — AI가 RP 맥락 판단 후 오래된 엔트리 압축
@@ -349,13 +27,14 @@ For each "add", include a boolean "live" field:
  * @returns {Promise<{compressed: number}>}
  */
 export async function compress() {
-    const settings = getSettings();
+    const settings = structuredClone(getSettings());
+    const operation = operationContext();
 
     if (!settings.targetLorebook) {
         throw new Error('대상 로어북을 먼저 선택해주세요.');
     }
 
-    const data = await loadTargetLorebook();
+    const data = await loadAnyLorebook(settings.targetLorebook);
     if (!data) {
         throw new Error('로어북을 로드할 수 없습니다.');
     }
@@ -435,7 +114,7 @@ Rules:
 
         // 원본 보존
         if (!meta.originalContent) {
-            setMetadata(uid, { originalContent: entry.content }, settings.targetLorebook);
+            stageMetadata(data, uid, { originalContent: entry.content }, settings.targetLorebook);
         }
 
         const targetRatio = targetTier === 2 ? settings.tier2TargetRatio : settings.tier3TargetRatio;
@@ -457,7 +136,7 @@ Rules:
 
             // 엔트리 업데이트
             updateEntryContent(data, uid, compressedText, settings.targetLorebook);
-            setMetadata(uid, { tier: targetTier, lastUpdated: Date.now() }, settings.targetLorebook);
+            stageMetadata(data, uid, { tier: targetTier, lastUpdated: Date.now() }, settings.targetLorebook);
 
             // 새 벡터
             newVectorEntries.push({
@@ -476,6 +155,7 @@ Rules:
     }
 
     if (compressed > 0) {
+        if (!isOperationCurrent(operation)) throw new Error('채팅이 변경되어 저장을 중단했습니다.');
         await saveLorebook(settings.targetLorebook, data);
         refreshEditor();
 
@@ -507,7 +187,8 @@ Rules:
  * @returns {Promise<{filled: number, skipped: number, failed: number, total: number}>}
  */
 export async function backfillSummaries(options = {}) {
-    const settings = getSettings();
+    const settings = structuredClone(getSettings());
+    const operation = operationContext();
     const batchSize = options.batchSize ?? 8;
     const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
     const lorebookName = options.lorebookName || settings.targetLorebook;
@@ -517,7 +198,7 @@ export async function backfillSummaries(options = {}) {
     }
 
     const data = lorebookName === settings.targetLorebook
-        ? await loadTargetLorebook()
+        ? await loadAnyLorebook(settings.targetLorebook)
         : await loadAnyLorebook(lorebookName);
     if (!data) {
         throw new Error(`로어북 "${lorebookName}"을 로드할 수 없습니다.`);
@@ -526,6 +207,7 @@ export async function backfillSummaries(options = {}) {
     // summary가 비어있는 활성 엔트리만 수집 (외부 로어북도 동일 — 메타 없으면 자동 생성됨)
     const targets = [];
     for (const [uid, entry] of Object.entries(data.entries || {})) {
+        if (options.uids && !options.uids.includes(String(uid))) continue;
         if (entry.disable) continue;
         const meta = getMetadata(uid, lorebookName);
         const existing = meta?.summary;
@@ -566,7 +248,7 @@ export async function backfillSummaries(options = {}) {
                 for (const s of parsed.summaries) {
                     const uid = String(s.uid);
                     const summary = typeof s.summary === 'string' ? s.summary.trim() : '';
-                    if (!summary) {
+                    if (!batch.some(e => e.uid === uid) || !summary) {
                         failed++;
                         continue;
                     }
@@ -574,7 +256,7 @@ export async function backfillSummaries(options = {}) {
                     const existingMeta = getMetadata(uid, lorebookName);
                     if (!existingMeta) {
                         const ent = data.entries[uid];
-                        setMetadata(uid, {
+                        stageMetadata(data, uid, {
                             tier: 1,
                             createdAt: Date.now(),
                             category: 'fact',
@@ -584,7 +266,7 @@ export async function backfillSummaries(options = {}) {
                             summary,
                         }, lorebookName);
                     } else {
-                        setMetadata(uid, { summary }, lorebookName);
+                        stageMetadata(data, uid, { summary }, lorebookName);
                     }
                     filled++;
                 }
@@ -603,6 +285,9 @@ export async function backfillSummaries(options = {}) {
         }
     }
 
+    if (!isOperationCurrent(operation)) throw new Error('채팅이 변경되어 저장을 중단했습니다.');
+
+    await saveLorebook(lorebookName, data);
     console.log(`${LOG_PREFIX} Backfill complete: ${filled} filled, ${failed} failed, ${total} total`);
     return { filled, skipped: 0, failed, total };
 }
@@ -615,13 +300,14 @@ export async function backfillSummaries(options = {}) {
  * @returns {Promise<{created: boolean, updated: boolean, uid: string, tokens: number}>}
  */
 export async function generateStoryArc() {
-    const settings = getSettings();
+    const settings = structuredClone(getSettings());
+    const operation = operationContext();
 
     if (!settings.targetLorebook) {
         throw new Error('대상 로어북을 먼저 선택해주세요.');
     }
 
-    const data = await loadTargetLorebook();
+    const data = await loadAnyLorebook(settings.targetLorebook);
     if (!data) {
         throw new Error('로어북을 로드할 수 없습니다.');
     }
@@ -691,10 +377,10 @@ export async function generateStoryArc() {
         : '(none)';
 
     const existingArcBlock = existingContent
-        ? `Previous arc summary (update/expand, do NOT discard existing facts unless contradicted by new events):\n${existingContent.replace(/^##\s+.*\r?\n/, '').trim()}\n`
+        ? `Previous continuity brief (verify against source facts; condense old detail, preserve supported causes and unresolved consequences):\n${existingContent.replace(/^##\s+.*\r?\n/, '').trim()}\n`
         : '';
 
-    const systemPrompt = 'You are a narrative arc summarizer. Output ONLY the prose summary text. No JSON, no markdown headers, no preamble.';
+    const systemPrompt = `${MEMORY_POLICY}\n${ARC_POLICY}\nOutput ONLY the prose continuity brief.`;
     const userPrompt = settings.storyArcPrompt
         .replace('{{existingArc}}', existingArcBlock)
         .replace('{{existingEntries}}', entriesBlock)
@@ -719,7 +405,7 @@ export async function generateStoryArc() {
         // 기존 update
         updateEntryContent(data, existingUid, cleanedArc, settings.targetLorebook);
         setEntryPinned(data, existingUid, true);  // 항상 pinned 유지
-        setMetadata(existingUid, { lastUpdated: Date.now() }, settings.targetLorebook);
+        stageMetadata(data, existingUid, { lastUpdated: Date.now() }, settings.targetLorebook);
         resultUid = existingUid;
         updated = true;
         console.log(`${LOG_PREFIX} Story Arc updated (uid=${existingUid})`);
@@ -737,7 +423,7 @@ export async function generateStoryArc() {
         // 새 entry pinned 처리
         setEntryPinned(data, entry.uid, true);
         // arc는 summary도 자동 — "When to select"는 사실상 항상이지만 형식상 채워둠
-        setMetadata(String(entry.uid), {
+        stageMetadata(data, String(entry.uid), {
             summary: 'When to select: always (story arc — provides overall timeline and relationship context).',
         }, settings.targetLorebook);
         resultUid = String(entry.uid);
@@ -745,56 +431,11 @@ export async function generateStoryArc() {
         console.log(`${LOG_PREFIX} Story Arc created (uid=${entry.uid})`);
     }
 
+    if (!isOperationCurrent(operation)) throw new Error('채팅이 변경되어 저장을 중단했습니다.');
+
     await saveLorebook(settings.targetLorebook, data);
     refreshEditor();
 
     const tokens = await countTokens(cleanedArc);
     return { created, updated, uid: resultUid, tokens };
-}
-
-/**
- * 잘린 JSON 객체 복구 — add/update/deactivate 중 완성된 부분만 추출
- */
-function salvageTruncatedObject(raw) {
-    const cleaned = raw.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '').trim();
-
-    // 완성된 배열 필드들을 개별 추출
-    const result = { add: [], update: [], deactivate: [] };
-    let found = false;
-
-    for (const field of ['add', 'update', 'deactivate']) {
-        const regex = new RegExp(`"${field}"\\s*:\\s*\\[`, 'i');
-        const match = cleaned.match(regex);
-        if (!match) continue;
-
-        const startIdx = cleaned.indexOf(match[0]) + match[0].length;
-        // 해당 배열의 끝 찾기 — 끝에서부터 ']' 또는 '}]' 시도
-        const remaining = cleaned.slice(startIdx);
-
-        // 완전한 배열 닫힘이 있는 경우
-        const closeBracket = remaining.indexOf(']');
-        if (closeBracket !== -1) {
-            try {
-                result[field] = JSON.parse('[' + remaining.slice(0, closeBracket + 1));
-                found = true;
-                continue;
-            } catch { /* try salvage */ }
-        }
-
-        // 잘린 경우 — 끝에서부터 '}' 찾아서 시도
-        for (let i = remaining.length - 1; i > 0; i--) {
-            if (remaining[i] === '}') {
-                try {
-                    const arr = JSON.parse('[' + remaining.slice(0, i + 1) + ']');
-                    if (Array.isArray(arr)) {
-                        result[field] = arr;
-                        found = true;
-                        break;
-                    }
-                } catch { /* try next */ }
-            }
-        }
-    }
-
-    return found ? result : null;
 }

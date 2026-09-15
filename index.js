@@ -7,7 +7,7 @@
 
 import { event_types } from '../../../events.js';
 import { chat_metadata, setExtensionPrompt } from '../../../../script.js';
-import { initStore, saveSettings } from './lore-store.js';
+import { initStore, saveSettings, operationContext, isOperationCurrent } from './lore-store.js';
 import { initLLMService } from './llm-service.js';
 import { populateLorebookDropdown } from './ui-shared.js';
 import { createSuggestModal } from './ui-suggest.js';
@@ -16,7 +16,7 @@ import { renderSelectionLorebookList, populateTargetLorebookDropdown, populateAd
 import { refreshVectorStatus } from './ui-settings.js';
 import { createPanel, openPanel, closePanel, togglePanel, refreshPanel, updateStatusBar, refreshInjectChip } from './ui-panel.js';
 import { handleBuildWorld, handleOrganize, handleCompress } from './ui-toolbar.js';
-import { selectEntries, clearSelectionCache, autoReindexStaleLorebooks, injectManagedEntriesIntoWI } from './summary-retrieval.js';
+import { selectEntries, clearSelectionCache, autoReindexStaleLorebooks, injectManagedEntriesIntoWI, recordActivatedEntries, getSelectionTrace } from './summary-retrieval.js';
 
 // ============================================================
 // Constants
@@ -313,6 +313,7 @@ async function onGenerationBeforeWI(type, options, dryRun) {
     if (!settings.summarySelectionEnabled) return;
     if (options?.skipWIAN) return;
 
+    const op = operationContext();
     const t0 = performance.now();
     _pendingActivation = null;   // 이전 턴 잔여가 이번 WI 조립에 섞이지 않게
     try {
@@ -328,10 +329,11 @@ async function onGenerationBeforeWI(type, options, dryRun) {
 
         // ST 평소 WI 흐름에 강제 활성화 — 프리셋 World Info 슬롯에 자연스럽게 들어감
         // entry의 position/depth/role/order 등 모두 ST가 평소처럼 처리
-        const entriesToActivate = result.entries.map(e => {
+        const entriesToActivate = result.entries.map((e, index) => {
             const raw = e.rawEntry || {};
             return {
                 ...raw,
+                order: 100000 - index,
                 world: e.lorebookName,
                 uid: raw.uid !== undefined ? raw.uid : (Number.isFinite(Number(e.uid)) ? Number(e.uid) : e.uid),
             };
@@ -340,7 +342,8 @@ async function onGenerationBeforeWI(type, options, dryRun) {
         // buffer.resetExternalEffects()로 외부 활성화를 통째로 지우는데, **dry run에서도** 지운다.
         // 다른 확장이 진짜 생성 사이에 dry-run generate를 끼우면 여기서 켜둔 게 날아간다.
         // → 활성화 루프 바로 앞(WORLDINFO_ENTRIES_LOADED)에서 emit하면 지워질 창이 없다.
-        _pendingActivation = entriesToActivate;
+        if (!isOperationCurrent(op)) return;
+        _pendingActivation = { entries: entriesToActivate, operation: op };
 
         const cacheTag = result.fromCache ? ' [CACHED]' : '';
         console.log(`${LOG_PREFIX} Selected ${entriesToActivate.length} entries in ${dt}ms${cacheTag} (${result.stage}) — WI 조립 시 활성화`);
@@ -365,14 +368,11 @@ async function onGenerationBeforeWI(type, options, dryRun) {
 async function onWorldInfoEntriesLoaded(lore) {
     await injectManagedEntriesIntoWI(lore);
 
-    if (!_pendingActivation || _pendingActivation.length === 0) return;
+    if (!_pendingActivation || !isOperationCurrent(_pendingActivation.operation) || !settings.enabled || !settings.summarySelectionEnabled) return;
 
-    // **1회 소비**. getSortedEntries()는 여기 말고도 두 군데서 더 불린다 —
-    // 채팅 전환 시 ST의 WI 프리캐시(world-info.js CHAT_CHANGED)와 Vector Storage 확장.
-    // 보관분을 남겨두면 그 호출들이 이전 턴에 고른 엔트리를 다시 켜버리고,
-    // 두 채팅이 같은 로어북을 공유하면 엉뚱한 엔트리가 실제로 주입된다.
-    const entries = _pendingActivation;
-    _pendingActivation = null;
+    // Keep this generation's scoped selection through intermediate WI scans/dry runs.
+    // Completion, stop, book edits and chat changes clear it; no result survives into the next turn.
+    const entries = _pendingActivation.entries;
 
     await context.eventSource.emit(event_types.WORLDINFO_FORCE_ACTIVATE, entries);
     console.log(`${LOG_PREFIX} Force-activated ${entries.length} entries (WI 조립 시점)`);
@@ -380,6 +380,13 @@ async function onWorldInfoEntriesLoaded(lore) {
 
 function registerEventListeners() {
     const eventSource = context.eventSource;
+    eventSource.on(event_types.WORLD_INFO_ACTIVATED, entries => { recordActivatedEntries(entries); refreshInjectChip(); });
+    eventSource.on(event_types.GENERATION_ENDED, () => {
+        if (getSelectionTrace().actual === null) recordActivatedEntries([]);
+        _pendingActivation = null; refreshInjectChip();
+    });
+    eventSource.on(event_types.GENERATION_STOPPED, () => { _pendingActivation = null; clearSelectionCache(); });
+    eventSource.on(event_types.WORLDINFO_UPDATED, () => { _pendingActivation = null; clearSelectionCache(); });
 
     // 채팅 변경 시 배지 업데이트 + 선택 캐시 무효화
     eventSource.on(event_types.CHAT_CHANGED, () => {

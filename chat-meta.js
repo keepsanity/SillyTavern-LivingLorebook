@@ -26,6 +26,7 @@ export function setChatLorebook(lorebookName) {
     }
     stampChatScope(lorebookName || '', getChatSelectionLorebooks());
     getSettings().targetLorebook = lorebookName || '';
+    clearSelectionCache();
     saveSettings();
     saveMetadata();
     console.log(`${LOG_PREFIX} chat_metadata.${LL_TARGET_KEY} = "${lorebookName}"`);

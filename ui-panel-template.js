@@ -21,25 +21,26 @@ export const PANEL_HTML = `
         </div>
 
         <!-- Toolbar -->
-        <div class="ll-toolbar">
-            <button class="ll-toolbar-btn build" data-action="build">
-                <i class="fa-solid fa-wand-magic-sparkles"></i> 세계관 생성
+        <div class="ll-toolbar ll-main-toolbar">
+            <button class="ll-toolbar-btn organize" data-action="organize">
+                <i class="fa-solid fa-broom"></i> 기억 정리
             </button>
             <button class="ll-toolbar-btn add-entry" data-action="add-entry">
                 <i class="fa-solid fa-plus"></i> 새 엔트리
             </button>
-            <button class="ll-toolbar-btn organize" data-action="organize">
-                <i class="fa-solid fa-broom"></i> 기억 정리
-            </button>
-            <button class="ll-toolbar-btn compress" data-action="compress">
-                <i class="fa-solid fa-compress"></i> 압축
-            </button>
             <button class="ll-toolbar-btn arc" data-action="arc">
-                <i class="fa-solid fa-book-bookmark"></i> 줄거리 생성/업데이트
+                <i class="fa-solid fa-book-bookmark"></i> 줄거리
             </button>
-            <button class="ll-toolbar-btn reorganize" data-action="reorganize">
-                <i class="fa-solid fa-arrows-rotate"></i> 재구성
-            </button>
+            <details class="ll-more-actions">
+                <summary title="더보기" aria-label="추가 작업 더보기"><i class="fa-solid fa-ellipsis"></i><span>더보기</span></summary>
+                <div class="ll-more-list">
+                    <button class="ll-toolbar-btn" data-action="undo-memory" title="최근 기억 정리를 복구합니다. 채팅 하이드와 자동 줄거리 갱신은 포함하지 않습니다."><i class="fa-solid fa-rotate-left"></i> 마지막 정리 되돌리기</button>
+                    <div class="ll-more-divider"></div>
+                    <button class="ll-toolbar-btn build" data-action="build"><i class="fa-solid fa-wand-magic-sparkles"></i> 세계관 생성</button>
+                    <button class="ll-toolbar-btn reorganize" data-action="reorganize"><i class="fa-solid fa-arrows-rotate"></i> 재구성</button>
+                    <button class="ll-toolbar-btn compress" data-action="compress"><i class="fa-solid fa-layer-group"></i> 기억 압축</button>
+                </div>
+            </details>
         </div>
 
         <!-- World description input (hidden by default) -->
@@ -71,6 +72,9 @@ export const PANEL_HTML = `
 
         <!-- Settings view (hidden by default) -->
         <div class="ll-settings-view" id="ll_settings_view">
+            <div class="ll-settings-section-title">기억 적용과 검색 예산</div>
+            <div class="ll-settings-row"><label>LL 선택 토큰 한도 (0=ST 예산 사용)</label><input class="ll-settings-input" id="ll_s_memory_budget" type="number" min="0" step="100" /></div>
+            <p class="ll-memory-guide">이름 직접 언급 시 인물 정보, 현재 관계와 열린 약속을 먼저 선택합니다. Summary 없이도 의미·단어 검색을 사용할 수 있습니다.</p>
             <div class="ll-settings-section-title">
                 <i class="fa-solid fa-map-pin"></i> 엔트리 삽입 위치
             </div>
@@ -87,8 +91,13 @@ export const PANEL_HTML = `
             </div>
 
             <div class="ll-settings-section-title">
-                <i class="fa-solid fa-broom"></i> 기억 정리 후 동작
+                <i class="fa-solid fa-broom"></i> 기억 정리
             </div>
+            <label class="checkbox_label"><input type="checkbox" id="ll_s_review_memories" />변경 전후와 근거를 검토한 뒤 적용</label>
+            <label class="checkbox_label">
+                <input id="ll_s_auto_arc_organize" type="checkbox" />
+                <span>줄거리 자동 생성 / 갱신 <span style="font-size:10px;opacity:0.6;">(첫 정리부터 · 완료 후 하이드)</span></span>
+            </label>
             <div class="ll-settings-row">
                 <label>분석한 메시지 자동 하이드</label>
                 <input class="ll-settings-input" id="ll_s_hide_after" type="checkbox" style="width:auto;" />
@@ -116,7 +125,7 @@ export const PANEL_HTML = `
             </div>
 
             <div class="ll-settings-section-title">
-                <i class="fa-solid fa-layer-group"></i> 압축 설정
+                <i class="fa-solid fa-layer-group"></i> 기억 압축
             </div>
             <div class="ll-settings-row">
                 <label>Tier 2 압축률</label>
@@ -155,10 +164,6 @@ export const PANEL_HTML = `
                     <span>기억 정리 후 자동 Summary 백필 <span style="font-size:10px;opacity:0.6;">(managed mode 한정, 새 entries만)</span></span>
                 </label>
                 <label class="checkbox_label">
-                    <input id="ll_s_auto_arc_organize" type="checkbox" />
-                    <span>기억 정리 후 자동 줄거리 업데이트 <span style="font-size:10px;opacity:0.6;">(기존 arc 있을 때만)</span></span>
-                </label>
-                <label class="checkbox_label">
                     <input id="ll_s_auto_arc_reorganize" type="checkbox" />
                     <span>재구성 후 자동 줄거리 업데이트 <span style="font-size:10px;opacity:0.6;">(기존 arc 있을 때만)</span></span>
                 </label>
@@ -169,7 +174,7 @@ export const PANEL_HTML = `
             </div>
             <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:6px;">
                 <div style="font-size:11px;opacity:0.7;line-height:1.4;">
-                    매 generation 직전 AI가 summary 보고 적절한 엔트리만 골라 주입.
+                    매 생성 직전 이름·의미·단어 검색으로 필요한 기억을 선택합니다. AI 모드를 선택한 경우에만 summary를 사용합니다.
                     아래 <b>선택 소스 로어북</b>에서 통제할 로어북을 등록하고, 각 로어북마다 <b>managed mode 전환</b>을 눌러 ST 자동 활성화를 끕니다 (이중 주입 방지).
                 </div>
             </div>
@@ -252,12 +257,12 @@ export const PANEL_HTML = `
                 <div class="ll-settings-row ll-eng-fast">
                     <label>키워드 직격</label>
                     <input class="ll-settings-input" id="ll_s_keyword_match" type="checkbox" style="width:auto;" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">엔트리 키워드가 대화에 그대로 나오면 상대 컷오프에서 면제 (이름이 나왔는데 점수가 낮아 밀릴 때)</span>
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">이름·별칭으로 인물 정보와 현재 관계를 먼저 확보하고, 사건 키워드는 검색을 보완</span>
                 </div>
                 <div class="ll-settings-row ll-eng-fast">
-                    <label>상대 컷오프 비율</label>
+                    <label>단어 단독 결과 하한</label>
                     <input class="ll-settings-input" id="ll_s_vector_ratio" type="number" min="0" max="1" step="0.05" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">0.6 = 양쪽 엔진 동의한 것만(권장). 낮출수록 BM25 단독 매칭도 허용. 0=끔</span>
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">단어 1등 점수 대비 비율. 벡터 장애/단어 모드에 적용하며 아래 바닥선과 더 높은 값을 사용. 이름 직접 일치는 별도 처리</span>
                 </div>
                 <div class="ll-settings-row ll-eng-fast">
                     <label>단어매칭 바닥선</label>
@@ -366,9 +371,9 @@ export const PANEL_HTML = `
                 <span style="font-size:10px;opacity:0.7;">저장</span>
                 <span class="ll-status-value" id="ll_stat_storage">0</span>
             </div>
-            <div class="ll-status-item ll-stat-inject" id="ll_stat_inject_box" title="실제 주입 토큰 (마지막 generation 기준) — 클릭하면 breakdown">
+            <div class="ll-status-item ll-stat-inject" id="ll_stat_inject_box" title="선택한 기억 토큰 — 클릭하면 선택 이유와 WI 활성 결과">
                 <i class="fa-solid fa-arrow-down-to-bracket"></i>
-                <span style="font-size:10px;opacity:0.7;">주입</span>
+                <span style="font-size:10px;opacity:0.7;">선택</span>
                 <span class="ll-status-value" id="ll_stat_inject">—</span>
                 <span class="ll-stat-ratio" id="ll_stat_ratio" style="font-size:10px;opacity:0.6;"></span>
             </div>

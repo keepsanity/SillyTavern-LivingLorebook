@@ -7,9 +7,12 @@
 import { characters, this_chid } from '../../../../script.js';
 import { createNewWorldInfo } from '../../../world-info.js';
 import { refreshPanel, getCharacterContext, populateLorebookDropdown } from './ui-shared.js';
-import { getSettings } from './lore-store.js';
+import { getSettings, isOperationCurrent } from './lore-store.js';
+import { finishOrganize } from './organize-followup.js';
+import { reviewMemories } from './ui-review.js';
+import { undoLastMemory } from './memory-history.js';
 import { clearSelectionCache } from './summary-retrieval.js';
-import { organize, compress, generateStoryArc } from './memory-manager.js';
+import { organize, compress, generateStoryArc, backfillSummaries } from './memory-manager.js';
 import { generateWorld, reorganizeExisting } from './world-builder.js';
 import { setChatLorebook } from './chat-meta.js';
 import { openSuggestModal } from './ui-suggest.js';
@@ -25,6 +28,14 @@ export async function handleToolbarAction(action) {
     if (isProcessing) return;
 
     switch (action) {
+        case 'undo-memory':
+            try {
+                await undoLastMemory();
+                clearSelectionCache();
+                await refreshPanel();
+                toastr.info('마지막 기억 정리를 되돌렸습니다. 원문 하이드는 채팅에서 별도로 해제할 수 있습니다.');
+            } catch (err) { toastr.warning(err.message); }
+            return;
         case 'build':
             // 새 워크플로우: 제안 모달 열기
             openSuggestModal();
@@ -151,12 +162,16 @@ export async function handleOrganize() {
 // 정리 범위 모달은 ui-organize-range.js로 분리됨 (openOrganizeRangeModal import)
 
 async function runOrganize(options = {}) {
-    const settings = getSettings();
+    if (isProcessing) return;
+    const settings = structuredClone(getSettings());
     const chat = SillyTavern.getContext().chat || [];
     setToolbarProcessing(true, 'organize');
 
     try {
-        const result = await organize(chat, getCharacterContext(), options);
+        const result = await organize(chat, getCharacterContext(), { ...options, review: reviewMemories });
+        if (result.cancelled) return;
+        clearSelectionCache();
+        if (result.warnings?.length) toastr.warning(result.warnings.join(' / '));
         const parts = [];
         if (result.added > 0) parts.push(`추가 ${result.added}`);
         if (result.updated > 0) parts.push(`수정 ${result.updated}`);
@@ -169,11 +184,14 @@ async function runOrganize(options = {}) {
         }
 
         // 자동 체인 결과 알림 (backfill / arc)
-        const chain = result.chain;
+        const chain = await finishOrganize(result, settings, {
+            isCurrent: isOperationCurrent, backfill: backfillSummaries, arc: generateStoryArc,
+        });
         if (chain) {
             const chainParts = [];
             if (chain.backfilled > 0) chainParts.push(`🔍 summary ${chain.backfilled}개 백필`);
-            if (chain.arcUpdated) chainParts.push('📖 줄거리 업데이트');
+            if (chain.arcCreated) chainParts.push('📖 첫 줄거리 생성');
+            else if (chain.arcUpdated) chainParts.push('📖 줄거리 업데이트');
             if (chainParts.length > 0) {
                 toastr.info(chainParts.join(' · '), '자동 체인', { timeOut: 4000 });
             }
@@ -182,10 +200,21 @@ async function runOrganize(options = {}) {
             }
         }
 
+        if (!chain.allowHide && chain.errors.length) {
+            toastr.warning('줄거리를 완성하지 못해 원문 하이드를 보류했습니다. 기억 정리는 저장됐습니다. 줄거리 버튼으로 재시도해주세요.', 'LivingLorebook', { timeOut: 8000 });
+        }
+
         // 자동 하이드
-        if (settings.hideAfterOrganize && Array.isArray(result.processedIndices) && result.processedIndices.length > 0) {
+        if (chain.allowHide && isOperationCurrent(result.operation) && settings.hideAfterOrganize && Array.isArray(result.processedIndices) && result.processedIndices.length > 0) {
             try {
                 const { hideChatMessageRange } = await import('../../../chats.js');
+                const assertScope = () => {
+                    if (!isOperationCurrent(result.operation)) throw new Error('채팅이 바뀌어 원문 하이드를 중단했습니다.');
+                    if (result.processedIndices.some(i => JSON.stringify([chat[i]?.is_user, chat[i]?.name, chat[i]?.mes]) !== result.sourceSignatures[i])) {
+                        throw new Error('정리 후 대화가 변경되어 원문 하이드를 중단했습니다.');
+                    }
+                };
+                assertScope();
                 const depth = Math.max(0, Number(settings.hideAfterOrganizeDepth) || 0);
                 // depth만큼 최근 메시지는 제외 (chat.length - 1 부터 depth개는 건드리지 않음)
                 const keepFromIdx = chat.length - depth;
@@ -201,10 +230,12 @@ async function runOrganize(options = {}) {
                             prev = targetIndices[i];
                             continue;
                         }
+                        assertScope();
                         await hideChatMessageRange(rangeStart, prev, false);
                         rangeStart = targetIndices[i];
                         prev = rangeStart;
                     }
+                    assertScope();
                     await hideChatMessageRange(rangeStart, prev, false);
                     toastr.info(`${targetIndices.length}개의 메시지가 하이드 처리되었습니다.`);
                 }

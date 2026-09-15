@@ -7,7 +7,7 @@ import { escapeHtml, escapeAttr, refreshPanel } from './ui-shared.js';
 import {
     getSettings,
     loadTargetLorebook, saveLorebook, refreshEditor,
-    updateEntryFields, enableEntry, deactivateEntry, setEntryPinned, setMetadata, deleteEntry,
+    getMetadata, stageMetadata, updateEntryFields, enableEntry, deactivateEntry, setEntryPinned, setMetadata, deleteEntry,
 } from './lore-store.js';
 import { clearSelectionCache } from './summary-retrieval.js';
 
@@ -26,6 +26,7 @@ export function openInlineEditor(card, uid) {
     const title = card.querySelector('.ll-entry-title')?.textContent.replace(/HIDE\s*$/, '').trim() || '';
     const rawContent = card.querySelector('.ll-entry-content')?.dataset?.raw || '';
     const currentCat = card.dataset.category || 'fact';
+    const metadata = getMetadata(uid, getSettings().targetLorebook) || {};
     const currentKeywords = Array.from(card.querySelectorAll('.ll-entry-keyword')).map(el => el.textContent);
 
     card.classList.add('ll-editing');
@@ -52,6 +53,15 @@ export function openInlineEditor(card, uid) {
         <div class="ll-edit-row">
             <label>키워드 (쉼표 구분)</label>
             <input type="text" class="ll-edit-keywords" value="${escapeAttr(currentKeywords.join(', '))}" />
+        </div>
+        <div class="ll-edit-row"><label>이름 / 별칭 (쉼표 구분)</label><input class="ll-edit-aliases" value="${escapeAttr((metadata.aliases || []).join(', '))}" /></div>
+        <div class="ll-edit-memory-state">
+            <label class="ll-edit-check">
+                <input class="ll-edit-open-loop" type="checkbox" ${metadata.openLoop ? 'checked' : ''} />
+                <span>미해결 사항</span>
+            </label>
+            <div class="ll-edit-hint">아직 남아 있는 약속·목표·갈등에 표시합니다. 관련 인물이 언급될 때 우선 검색에 활용합니다.</div>
+            <div class="ll-edit-hint">${metadata.live ? 'LIVE 켜짐 · 기억 정리 때 AI가 완료 여부를 갱신할 수 있습니다.' : 'LIVE 꺼짐 · AI가 이 표시를 갱신하려면 엔트리의 LIVE를 켜주세요.'}</div>
         </div>
         <div class="ll-edit-actions">
             <button class="ll-edit-cancel">취소</button>
@@ -82,7 +92,7 @@ function closeInlineEditor(card) {
 }
 
 async function saveInlineEdit(card, uid, form) {
-    const settings = getSettings();
+    const settings = structuredClone(getSettings());
     const newTitle = form.querySelector('.ll-edit-title')?.value?.trim() || 'untitled';
     const newContent = form.querySelector('.ll-edit-content')?.value?.trim() || '';
     const newCat = form.querySelector('.ll-edit-cat')?.value || 'fact';
@@ -100,7 +110,12 @@ async function saveInlineEdit(card, uid, form) {
             category: newCat,
         }, settings.targetLorebook);
 
+        stageMetadata(data, uid, {
+            aliases: (form.querySelector('.ll-edit-aliases')?.value || '').split(',').map(v => v.trim()).filter(Boolean),
+            openLoop: !!form.querySelector('.ll-edit-open-loop')?.checked,
+        }, settings.targetLorebook);
         await saveLorebook(settings.targetLorebook, data);
+        clearSelectionCache();
         refreshEditor();
         toastr.success('저장되었습니다.');
         await refreshPanel();
@@ -111,7 +126,7 @@ async function saveInlineEdit(card, uid, form) {
 }
 
 export async function handleEntryHideToggle(uid) {
-    const settings = getSettings();
+    const settings = structuredClone(getSettings());
     try {
         const data = await loadTargetLorebook();
         if (!data?.entries?.[uid]) throw new Error('엔트리를 찾을 수 없습니다');
@@ -135,7 +150,7 @@ export async function handleEntryHideToggle(uid) {
 }
 
 export async function handleEntryLiveToggle(uid, live) {
-    const settings = getSettings();
+    const settings = structuredClone(getSettings());
     try {
         // live는 순수 LL 메타데이터(WI 필드 아님) → setMetadata가 알아서 저장.
         // organize 때 이 플래그된 엔트리만 풀 내용으로 보내 갱신한다.
@@ -152,7 +167,7 @@ export async function handleEntryLiveToggle(uid, live) {
 }
 
 export async function handleEntryPinToggle(uid, pinned) {
-    const settings = getSettings();
+    const settings = structuredClone(getSettings());
     try {
         const data = await loadTargetLorebook();
         if (!data?.entries?.[uid]) throw new Error('엔트리를 찾을 수 없습니다');
@@ -170,7 +185,7 @@ export async function handleEntryPinToggle(uid, pinned) {
 }
 
 export async function handleEntryDelete(uid) {
-    const settings = getSettings();
+    const settings = structuredClone(getSettings());
     if (!confirm('이 엔트리를 완전히 삭제하시겠습니까? 되돌릴 수 없습니다.')) return;
 
     try {

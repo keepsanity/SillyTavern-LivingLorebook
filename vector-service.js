@@ -193,6 +193,7 @@ export async function insertEntries(collectionId, entries) {
     const response = await fetch('/api/vector/insert', {
         method: 'POST',
         headers: getRequestHeaders(),
+        signal: AbortSignal.timeout(30000),
         body: JSON.stringify({
             ...getVectorsRequestBody(),
             collectionId: collectionId,
@@ -223,6 +224,7 @@ export async function queryMultipleCollections(collectionIds, searchText, topK =
     const response = await fetch('/api/vector/query-multi', {
         method: 'POST',
         headers: getRequestHeaders(),
+        signal: AbortSignal.timeout(30000),
         body: JSON.stringify({
             ...getVectorsRequestBody(),
             collectionIds: collectionIds,
@@ -248,6 +250,7 @@ export async function deleteEntries(collectionId, hashes) {
     const response = await fetch('/api/vector/delete', {
         method: 'POST',
         headers: getRequestHeaders(),
+        signal: AbortSignal.timeout(30000),
         body: JSON.stringify({
             ...getVectorsRequestBody(),
             collectionId: collectionId,
@@ -267,6 +270,7 @@ async function purgeCollection(collectionId) {
     const response = await fetch('/api/vector/purge', {
         method: 'POST',
         headers: getRequestHeaders(),
+        signal: AbortSignal.timeout(30000),
         body: JSON.stringify({
             ...getVectorsRequestBody(),
             collectionId: collectionId,
