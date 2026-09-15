@@ -1,3 +1,4 @@
+import { l } from './i18n.js';
 /**
  * UI Shared — 여러 UI 모듈이 공유하는 상수/순수 헬퍼 + 소소한 도메인 헬퍼.
  * (index.js가 UI를 다 들고 있던 걸 모듈로 쪼개는 리팩터의 토대)
@@ -46,14 +47,14 @@ export function getCharacterContext() {
 
 // 카테고리 설정 (아이콘 / 한글 라벨 / 이모지)
 export const CATEGORIES = {
-    arc:           { icon: 'fa-solid fa-book-bookmark',  label: '줄거리',   iconChar: '📖' },
-    character:     { icon: 'fa-solid fa-user',           label: '캐릭터',   iconChar: '🧑' },
-    relationship:  { icon: 'fa-solid fa-heart',          label: '관계',     iconChar: '💕' },
-    location:      { icon: 'fa-solid fa-location-dot',   label: '장소',     iconChar: '📍' },
-    event:         { icon: 'fa-solid fa-bolt',           label: '사건',     iconChar: '⚡' },
-    routine:       { icon: 'fa-solid fa-clock',          label: '일상',     iconChar: '🔄' },
-    item:          { icon: 'fa-solid fa-gem',            label: '아이템',   iconChar: '💎' },
-    fact:          { icon: 'fa-solid fa-circle-info',    label: '설정',     iconChar: 'ℹ️' },
+    arc:           { icon: 'fa-solid fa-book-bookmark',  label: l('ll.687bf8f66ea0f585', "Story Arc"),   iconChar: '📖' },
+    character:     { icon: 'fa-solid fa-user',           label: l('ll.280f69c4a593505d', "Characters"),   iconChar: '🧑' },
+    relationship:  { icon: 'fa-solid fa-heart',          label: l('ll.18ab6599abaaab1b', "Relationships"),     iconChar: '💕' },
+    location:      { icon: 'fa-solid fa-location-dot',   label: l('ll.61eaecc09cb7e53d', "Locations"),     iconChar: '📍' },
+    event:         { icon: 'fa-solid fa-bolt',           label: l('ll.d04be92d4a8150be', "Events"),     iconChar: '⚡' },
+    routine:       { icon: 'fa-solid fa-clock',          label: l('ll.2513c886e137082c', "Routines"),     iconChar: '🔄' },
+    item:          { icon: 'fa-solid fa-gem',            label: l('ll.976d37728f17ec71', "Items"),   iconChar: '💎' },
+    fact:          { icon: 'fa-solid fa-circle-info',    label: l('ll.category.fact', "Facts"),     iconChar: 'ℹ️' },
 };
 
 /** 텍스트 노드용 이스케이프 (innerHTML로 넣을 본문) */

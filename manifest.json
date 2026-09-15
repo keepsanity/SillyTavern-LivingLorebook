@@ -10,5 +10,9 @@
     "license": "AGPL-3.0",
     "homePage": "https://github.com/keepsanity/SillyTavern-LivingLorebook",
     "auto_update": false,
-    "description": "로어북을 살아있게 — AI가 대화에서 기억을 정리하고, 매 생성 직전 관련 로어만 골라 주입합니다."
+    "description": "Organize conversation memories and retrieve relevant lore before each generation.",
+    "i18n": {
+        "ko": "locales/ko.json",
+        "ko-kr": "locales/ko.json"
+    }
 }

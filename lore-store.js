@@ -1,3 +1,4 @@
+import { l, lt } from './i18n.js';
 /**
  * Lore Store — 설정 관리, 로어북 CRUD 래퍼, 티어 메타데이터
  */
@@ -323,7 +324,7 @@ export function initStore(context) {
         }
         _settings.vectorIndexSignature = '';
         _settings._selectionEngineV3 = true;
-        console.log('[LivingLorebook] Migrated selection engine to RRF hybrid (컷오프 초기화, 재색인 필요)');
+        console.log(l('ll.b11c6a800f87cd5e', "[LivingLorebook] Migrated selection engine to RRF hybrid (cutoff reset; reindex required)"));
     }
 
     // Migration v4: 상대 컷오프를 다시 켠다 (v3에서 0으로 꺼뒀던 것).
@@ -354,7 +355,7 @@ export function initStore(context) {
     if (!_settings._reorgSafeV6) {
         if (_settings.reorganizeOldHandling === 'delete') {
             _settings.reorganizeOldHandling = 'hide';
-            console.log('[LivingLorebook] 재구성 시 기존 엔트리 처리: 삭제 → 하이드로 변경 (복구 가능하도록). 설정에서 되돌릴 수 있습니다.');
+            console.log(l('ll.7cc46e1a5012554f', "[LivingLorebook] Reorganization now hides originals instead of deleting them. You can change this in settings."));
         }
         _settings._reorgSafeV6 = true;
     }
@@ -366,7 +367,7 @@ export function initStore(context) {
         const removed = dead.filter(k => k in _settings);
         for (const k of removed) delete _settings[k];
         if (removed.length > 0) {
-            console.log(`[LivingLorebook] 안 쓰는 설정 ${removed.length}개 제거: ${removed.join(', ')}`);
+            console.log(lt('ll.cb765d552f18c6bd')`[LivingLorebook] Removed unused settings: ${removed.length}items: ${removed.join(', ')}`);
         }
         _settings._deadKeysV5 = true;
     }
@@ -374,7 +375,7 @@ export function initStore(context) {
     if (!_settings._cutoffV4) {
         if (!(typeof _settings.vectorCutoffRatio === 'number' && _settings.vectorCutoffRatio > 0)) {
             _settings.vectorCutoffRatio = 0.6;
-            console.log('[LivingLorebook] 상대 컷오프 0.6 적용 — BM25 단독 매칭 제외 (설정에서 조절 가능)');
+            console.log(l('ll.56c096f47b1e0b7f', "[LivingLorebook] Applied relative cutoff 0.6 (adjustable in settings)"));
         }
         _settings._cutoffV4 = true;
     }
@@ -488,7 +489,7 @@ function inferCategory(title, content) {
  */
 export function rebuildLorebookMetadata(lorebookName, data) {
     if (!lorebookName || !data?.entries) {
-        throw new Error('로어북을 로드할 수 없습니다.');
+        throw new Error(l('ll.fb9199f839943224', "Could not load the lorebook."));
     }
     if (!_settings.entryMetadata || typeof _settings.entryMetadata !== 'object') {
         _settings.entryMetadata = {};
@@ -535,8 +536,8 @@ export function rebuildLorebookMetadata(lorebookName, data) {
     }
 
     saveSettings();
-    console.log(`[LivingLorebook] 메타데이터 재구축 [${lorebookName}]: `
-        + `갱신 ${updated} · 신규 ${seeded} · 고아 제거 ${orphans}`, byCategory);
+    console.log(lt('ll.923b697892d4f0e5')`[LivingLorebook] Rebuilding metadata [${lorebookName}]: `
+        + lt('ll.1016f2459a7a7dcb')`updated ${updated} · new ${seeded} · removed orphaned records ${orphans}`, byCategory);
     return { updated, seeded, orphans, byCategory };
 }
 
@@ -637,11 +638,11 @@ function readChatScope() {
         const saved = chatId ? getScopeMap()[chatId] : null;
         if (saved) {
             result = { target: saved.t || '', extras: Array.isArray(saved.e) ? saved.e : [] };
-            _scopeSource = 'scopeByChat (이 채팅이 쓰던 값)';
+            _scopeSource = l('ll.06a124209caba670', "scopeByChat (saved values for this chat)");
         } else {
             // 남의 채팅 값을 빌려오느니 비운다. 채팅 열면 1번 경로로 곧 채워진다.
             result = { target: '', extras: [] };
-            _scopeSource = chatId ? 'empty (이 채팅 기록 없음)' : 'empty (열린 채팅 없음)';
+            _scopeSource = chatId ? l('ll.b9533af48a9e647b', "empty (no record for this chat)") : l('ll.7e2bb6fd33f917b1', "empty (no open chat)");
         }
     }
 
@@ -812,7 +813,7 @@ export async function createEntry(lorebookName, data, { title, content, keywords
  * 엔트리 내용 업데이트
  */
 export function updateEntryContent(data, uid, newContent, lorebookName) {
-    if (typeof newContent !== 'string' || !newContent.trim()) throw new Error('빈 본문은 저장할 수 없습니다.');
+    if (typeof newContent !== 'string' || !newContent.trim()) throw new Error(l('ll.ca839afc9bbdbb90', "Cannot save an empty body."));
     const entries = data?.entries;
     if (!entries || !entries[uid]) return false;
 
@@ -927,24 +928,24 @@ export function updateEntryFields(data, uid, { title, content, keywords, categor
  * 로어북 저장
  */
 export async function saveLorebook(lorebookName, data) {
-    if (_saving.has(lorebookName)) throw new Error('이 로어북을 다른 작업이 저장 중입니다. 다시 시도해주세요.');
+    if (_saving.has(lorebookName)) throw new Error(l('ll.65b4c9f53f9d2ed1', "Another operation is saving this lorebook. Please try again."));
     _saving.add(lorebookName);
     try {
         const rev = _revisions.get(data);
-        if (rev && rev.name !== lorebookName) throw new Error('작업을 시작한 로어북과 저장 대상이 다릅니다.');
+        if (rev && rev.name !== lorebookName) throw new Error(l('ll.8c8dcd4cd6f58c44', "The destination differs from the lorebook where this operation started."));
         if (rev) {
             const current = await fetch('/api/worldinfo/get', {
                 method: 'POST', headers: getRequestHeaders(), cache: 'no-cache',
                 body: JSON.stringify({ name: lorebookName }),
             });
-            if (!current.ok) throw new Error('저장 전 로어북 확인에 실패했습니다.');
-            if (JSON.stringify(await current.json()) !== rev.json) throw new Error('분석 중 로어북이 변경됐습니다. 다시 불러와 정리해주세요.');
+            if (!current.ok) throw new Error(l('ll.a495eaa5f53fda6a', "Could not verify the lorebook before saving."));
+            if (JSON.stringify(await current.json()) !== rev.json) throw new Error(l('ll.597910b5f58c7633', "The lorebook changed during analysis. Reload it and organize again."));
         }
         const response = await fetch('/api/worldinfo/edit', {
             method: 'POST', headers: getRequestHeaders(),
             body: JSON.stringify({ name: lorebookName, data }),
         });
-        if (!response.ok) throw new Error(`로어북 저장 실패 (${response.status})`);
+        if (!response.ok) throw new Error(lt('ll.96f5730b6571a56a')`Lorebook save failed (${response.status})`);
         worldInfoCache.set(lorebookName, structuredClone(data));
         _revisions.set(data, { name: lorebookName, json: JSON.stringify(data) });
         for (const [uid, patch] of (_stagedMetadata.get(data) || [])) {
@@ -990,10 +991,10 @@ export function isOperationCurrent(op) {
  */
 export async function migrateToManagedMode(managed = true, lorebookName) {
     const name = lorebookName || _settings.targetLorebook;
-    if (!name) throw new Error('대상 로어북이 없습니다.');
+    if (!name) throw new Error(l('ll.254ad048a8e942b3', "No target lorebook."));
 
     const data = await loadAnyLorebook(name);
-    if (!data) throw new Error(`로어북 "${name}"을 로드할 수 없습니다.`);
+    if (!data) throw new Error(lt('ll.5a1b112120659992')`Lorebook "${name}"could not be loaded.`);
 
     let converted = 0;
     let skipped = 0;

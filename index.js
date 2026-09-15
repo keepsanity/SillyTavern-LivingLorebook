@@ -1,3 +1,4 @@
+import { l, lt } from './i18n.js';
 /**
  * Living Lorebook — AI 기반 로어북 자동 관리 확장
  *
@@ -236,7 +237,7 @@ async function maybeAutoReindex() {
         if (res) {
             clearSelectionCache();
             toastr.info(
-                `벡터 자동 재색인: ${res.reindexed.length}개 로어북 · ${res.entries}개 엔트리`,
+                lt('ll.7e81d6713f5ac169')`Auto-reindexing vectors: ${res.reindexed.length}lorebooks · ${res.entries}entries`,
                 'LivingLorebook', { timeOut: 3500 },
             );
             const panel = document.querySelector('.ll-panel');
@@ -346,7 +347,7 @@ async function onGenerationBeforeWI(type, options, dryRun) {
         _pendingActivation = { entries: entriesToActivate, operation: op };
 
         const cacheTag = result.fromCache ? ' [CACHED]' : '';
-        console.log(`${LOG_PREFIX} Selected ${entriesToActivate.length} entries in ${dt}ms${cacheTag} (${result.stage}) — WI 조립 시 활성화`);
+        console.log(lt('ll.8663286da8596cc0')`${LOG_PREFIX} Selected ${entriesToActivate.length} entries in ${dt}ms${cacheTag} (${result.stage}) — activated during WI assembly`);
 
         // 주입 칩 즉시 갱신
         try { refreshInjectChip(); } catch { /* ignore */ }
@@ -375,7 +376,7 @@ async function onWorldInfoEntriesLoaded(lore) {
     const entries = _pendingActivation.entries;
 
     await context.eventSource.emit(event_types.WORLDINFO_FORCE_ACTIVATE, entries);
-    console.log(`${LOG_PREFIX} Force-activated ${entries.length} entries (WI 조립 시점)`);
+    console.log(lt('ll.47c2a3f2f32faf3d')`${LOG_PREFIX} Force-activated ${entries.length} entries (during WI assembly)`);
 }
 
 function registerEventListeners() {
@@ -474,14 +475,14 @@ function registerSlashCommands() {
             name: 'll-organize',
             aliases: [],
             callback: async () => { await handleOrganize(); return ''; },
-            helpString: '기억 정리 — 최근 대화를 분석하여 로어북을 갱신합니다.',
+            helpString: l('ll.c267834c942efe95', "Organize memories — analyze recent conversation and update the lorebook."),
         });
 
         SlashCommandParser.addCommandObject({
             name: 'll-compress',
             aliases: [],
             callback: async () => { await handleCompress(); return ''; },
-            helpString: '기억 압축 — 오래된 엔트리를 티어에 따라 압축합니다.',
+            helpString: l('ll.1e549fd76ab5955c', "Compress memories — shorten older entries according to tier."),
         });
 
         SlashCommandParser.addCommandObject({
@@ -493,14 +494,14 @@ function registerSlashCommands() {
                 await handleBuildWorld();
                 return '';
             },
-            helpString: '세계관 생성 — 캐릭터 카드를 읽어 로어북 엔트리를 자동 생성합니다.',
+            helpString: l('ll.ae14dfb559579d52', "Generate world — create lorebook entries from the character card."),
         });
 
         SlashCommandParser.addCommandObject({
             name: 'll-panel',
             aliases: [],
             callback: async () => { openPanel(); return ''; },
-            helpString: 'Living Lorebook 패널을 엽니다.',
+            helpString: l('ll.51fc4487b6fc6af8', "Open the Living Lorebook panel."),
         });
 
         console.log(`${LOG_PREFIX} Slash commands registered`);

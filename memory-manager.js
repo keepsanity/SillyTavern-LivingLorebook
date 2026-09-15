@@ -1,3 +1,4 @@
+import { l, lt } from './i18n.js';
 import { operationContext, isOperationCurrent } from './lore-store.js';
 import { MEMORY_POLICY, ARC_POLICY } from './memory-policy.js';
 /**
@@ -31,12 +32,12 @@ export async function compress() {
     const operation = operationContext();
 
     if (!settings.targetLorebook) {
-        throw new Error('대상 로어북을 먼저 선택해주세요.');
+        throw new Error(l('ll.1c7e28934a4ba644', "Select a target lorebook first."));
     }
 
     const data = await loadAnyLorebook(settings.targetLorebook);
     if (!data) {
-        throw new Error('로어북을 로드할 수 없습니다.');
+        throw new Error(l('ll.fb9199f839943224', "Could not load the lorebook."));
     }
 
     // 현재 활성 Tier 1 엔트리 수집
@@ -91,7 +92,7 @@ Rules:
         classification = JSON.parse(cleaned);
     } catch (e) {
         console.error(`${LOG_PREFIX} Failed to parse compression classification:`, response);
-        throw new Error('AI 응답을 파싱할 수 없습니다.');
+        throw new Error(l('ll.23b16480449b3d31', "Could not parse the AI response."));
     }
 
     const collectionId = getCollectionId(settings.targetLorebook);
@@ -155,7 +156,7 @@ Rules:
     }
 
     if (compressed > 0) {
-        if (!isOperationCurrent(operation)) throw new Error('채팅이 변경되어 저장을 중단했습니다.');
+        if (!isOperationCurrent(operation)) throw new Error(l('ll.515f3432faf2e879', "The chat changed. Saving was cancelled."));
         await saveLorebook(settings.targetLorebook, data);
         refreshEditor();
 
@@ -194,14 +195,14 @@ export async function backfillSummaries(options = {}) {
     const lorebookName = options.lorebookName || settings.targetLorebook;
 
     if (!lorebookName) {
-        throw new Error('대상 로어북을 먼저 선택해주세요.');
+        throw new Error(l('ll.1c7e28934a4ba644', "Select a target lorebook first."));
     }
 
     const data = lorebookName === settings.targetLorebook
         ? await loadAnyLorebook(settings.targetLorebook)
         : await loadAnyLorebook(lorebookName);
     if (!data) {
-        throw new Error(`로어북 "${lorebookName}"을 로드할 수 없습니다.`);
+        throw new Error(lt('ll.5a1b112120659992')`Lorebook "${lorebookName}"could not be loaded.`);
     }
 
     // summary가 비어있는 활성 엔트리만 수집 (외부 로어북도 동일 — 메타 없으면 자동 생성됨)
@@ -285,7 +286,7 @@ export async function backfillSummaries(options = {}) {
         }
     }
 
-    if (!isOperationCurrent(operation)) throw new Error('채팅이 변경되어 저장을 중단했습니다.');
+    if (!isOperationCurrent(operation)) throw new Error(l('ll.515f3432faf2e879', "The chat changed. Saving was cancelled."));
 
     await saveLorebook(lorebookName, data);
     console.log(`${LOG_PREFIX} Backfill complete: ${filled} filled, ${failed} failed, ${total} total`);
@@ -304,18 +305,18 @@ export async function generateStoryArc() {
     const operation = operationContext();
 
     if (!settings.targetLorebook) {
-        throw new Error('대상 로어북을 먼저 선택해주세요.');
+        throw new Error(l('ll.1c7e28934a4ba644', "Select a target lorebook first."));
     }
 
     const data = await loadAnyLorebook(settings.targetLorebook);
     if (!data) {
-        throw new Error('로어북을 로드할 수 없습니다.');
+        throw new Error(l('ll.fb9199f839943224', "Could not load the lorebook."));
     }
 
     const ctx = SillyTavern.getContext();
     const chat = ctx.chat || [];
     if (chat.length === 0) {
-        throw new Error('대화가 비어있습니다.');
+        throw new Error(l('ll.6860965f9c298580', "The conversation is empty."));
     }
 
     // 활성 chat만 (is_hidden, is_system 제외) + 최근 N개로 trim
@@ -391,7 +392,7 @@ export async function generateStoryArc() {
 
     const arcText = await callLLM(systemPrompt, userPrompt, 2000, settings);
     if (!arcText || !arcText.trim()) {
-        throw new Error('AI가 빈 응답을 반환했습니다.');
+        throw new Error(l('ll.ef9e91a0eb7995ec', "The AI returned an empty response."));
     }
 
     const cleanedArc = arcText.trim();
@@ -418,7 +419,7 @@ export async function generateStoryArc() {
             category: 'arc',
         });
         if (!entry) {
-            throw new Error('Arc entry 생성 실패');
+            throw new Error(l('ll.bf161c083ec705ec', "Could not create the arc entry."));
         }
         // 새 entry pinned 처리
         setEntryPinned(data, entry.uid, true);
@@ -431,7 +432,7 @@ export async function generateStoryArc() {
         console.log(`${LOG_PREFIX} Story Arc created (uid=${entry.uid})`);
     }
 
-    if (!isOperationCurrent(operation)) throw new Error('채팅이 변경되어 저장을 중단했습니다.');
+    if (!isOperationCurrent(operation)) throw new Error(l('ll.515f3432faf2e879', "The chat changed. Saving was cancelled."));
 
     await saveLorebook(settings.targetLorebook, data);
     refreshEditor();

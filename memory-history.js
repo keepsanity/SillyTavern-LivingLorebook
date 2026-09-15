@@ -1,3 +1,4 @@
+import { l } from './i18n.js';
 import { getSettings, getMetadata, loadAnyLorebook, saveLorebook, stageMetadata, deleteEntry, saveSettings } from './lore-store.js';
 import { setWIOriginalDataValue } from '../../../world-info.js';
 
@@ -5,13 +6,13 @@ export async function undoLastMemory() {
     const settings = getSettings();
     const book = settings.targetLorebook;
     const journal = [...(settings.memoryJournal || [])].reverse().find(j => j.book === book);
-    if (!journal) throw new Error('이 로어북의 되돌릴 기억 정리 기록이 없습니다.');
+    if (!journal) throw new Error(l('ll.a75f96b34e3f9c81', "No organization history to undo for this lorebook."));
     const data = await loadAnyLorebook(book);
-    if (!data) throw new Error('로어북을 불러올 수 없습니다.');
+    if (!data) throw new Error(l('ll.06f205d172716625', "Could not load the lorebook."));
     for (const c of journal.changes) {
-        if (JSON.stringify(data.entries[c.uid]) !== c.after) throw new Error('정리 이후 엔트리가 편집됐습니다. 덮어쓰지 않고 중단했습니다.');
+        if (JSON.stringify(data.entries[c.uid]) !== c.after) throw new Error(l('ll.8c2076cee8412bb4', "This entry was edited after organization. Undo stopped to preserve those edits."));
         if (c.afterMeta !== undefined && JSON.stringify(getMetadata(c.uid, book)) !== c.afterMeta) {
-            throw new Error('정리 이후 별칭·LIVE·약속 상태 등 메타데이터가 편집됐습니다. 덮어쓰지 않고 중단했습니다.');
+            throw new Error(l('ll.0ebb4235c19b15ce', "Entry metadata was edited after organization. Undo stopped to preserve those edits."));
         }
     }
     for (const c of journal.changes) {

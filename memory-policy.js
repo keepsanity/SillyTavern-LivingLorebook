@@ -1,3 +1,4 @@
+import { l, lt } from './i18n.js';
 /** Shared memory contract. Added to system prompts without replacing saved user prompts. */
 export const MEMORY_POLICY = `
 Living Lorebook continuity contract (takes precedence over conflicting task wording):
@@ -48,9 +49,9 @@ Do not count the same event twice when both recent chat and memories describe it
 `;
 
 export function parseCompleteJSON(raw) {
-    if (typeof raw !== 'string') throw new Error('AI 응답이 문자열이 아닙니다.');
+    if (typeof raw !== 'string') throw new Error(l('ll.8b0dde7064ecd1ab', "The AI response is not a string."));
     try { return JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); }
-    catch { throw new Error('AI 응답이 불완전합니다. 기억과 원문은 변경하지 않았습니다. 범위를 줄여 다시 정리해주세요.'); }
+    catch { throw new Error(l('ll.019c603a2a1d949b', "The AI response is incomplete. Memories and source messages are unchanged. Try a smaller range.")); }
 }
 
 export function normalizeMemory(text) {
@@ -60,11 +61,11 @@ export function normalizeMemory(text) {
 /** Validate the entire proposal BEFORE writing anything. No salvage or missing-body coercion. */
 export function validateProposal(raw, data, metadata, processedIndices) {
     const obj = parseCompleteJSON(raw);
-    if (!obj || Array.isArray(obj) || typeof obj !== 'object') throw new Error('정리 응답 객체가 필요합니다.');
+    if (!obj || Array.isArray(obj) || typeof obj !== 'object') throw new Error(l('ll.eff2a2a278ea351d', "Expected an organization response object."));
     for (const key of ['add', 'update', 'deactivate']) {
-        if (!Array.isArray(obj[key])) throw new Error(`정리 응답에 ${key} 배열이 없습니다.`);
+        if (!Array.isArray(obj[key])) throw new Error(lt('ll.9da2bd8f140d6a95')`The organization response is missing the ${key} array.`);
     }
-    if (obj.deactivate.length) throw new Error('AI가 엔트리 비활성화를 제안했습니다. 상태 변경은 기존 엔트리를 갱신해야 합니다.');
+    if (obj.deactivate.length) throw new Error(l('ll.2f32bbb4912ecf43', "The AI proposed disabling entries. Update existing entries to reflect state changes instead."));
     const allowed = new Set(processedIndices);
     const cats = new Set(['character', 'relationship', 'location', 'event', 'routine', 'item', 'fact']);
     const used = new Set();
@@ -73,29 +74,29 @@ export function validateProposal(raw, data, metadata, processedIndices) {
     const changes = [];
     for (const [type, list] of [['add', obj.add], ['update', obj.update]]) {
         for (const item of list) {
-            if (!item || typeof item !== 'object') throw new Error('잘못된 변경 항목입니다.');
+            if (!item || typeof item !== 'object') throw new Error(l('ll.ad8629a6e23d6922', "Invalid change item."));
             const body = type === 'add' ? item.content : item.newContent;
-            if (typeof body !== 'string' || !body.trim()) throw new Error('빈 본문을 저장할 수 없습니다.');
+            if (typeof body !== 'string' || !body.trim()) throw new Error(l('ll.c9ca1035316f3e4c', "Cannot save an empty body."));
             if (!Array.isArray(item.sourceMessages) || !item.sourceMessages.length
                 || item.sourceMessages.some(i => !Number.isInteger(i) || !allowed.has(i))) {
-                throw new Error('변경의 근거 메시지 번호가 없거나 정리 범위를 벗어났습니다.');
+                throw new Error(l('ll.735ee975c69e42a2', "Source message IDs are missing or outside the selected range."));
             }
             for (const key of ['keywords', 'aliases']) {
                 if (item[key] !== undefined && (!Array.isArray(item[key]) || item[key].some(v => typeof v !== 'string'))) {
-                    throw new Error(`${key}는 문자열 배열이어야 합니다.`);
+                    throw new Error(lt('ll.2f1521d75cd58f8b')`${key}must be an array of strings.`);
                 }
             }
-            if (item.openLoop !== undefined && typeof item.openLoop !== 'boolean') throw new Error('openLoop 값이 올바르지 않습니다.');
+            if (item.openLoop !== undefined && typeof item.openLoop !== 'boolean') throw new Error(l('ll.325493f2b013ceb7', "Invalid openLoop value."));
             if (type === 'add') {
-                if (typeof item.title !== 'string' || !item.title.trim() || !cats.has(item.category)) throw new Error('제목 또는 카테고리가 잘못되었습니다.');
-                if (typeof item.live !== 'boolean') throw new Error('새 기억에 LIVE 여부가 없습니다.');
+                if (typeof item.title !== 'string' || !item.title.trim() || !cats.has(item.category)) throw new Error(l('ll.80fab05a0b80d640', "Invalid title or category."));
+                if (typeof item.live !== 'boolean') throw new Error(l('ll.0d60d52854436e5c', "A new memory is missing its LIVE flag."));
                 const sameSubject = Object.entries(data.entries || {}).find(([uid, e]) =>
                     !e.disable && metadata[uid]?.category === item.category
                     && normalizeMemory(e.comment) === normalizeMemory(item.title));
-                if (sameSubject) warnings.push(`같은 대상의 기존 엔트리 확인: ${item.title} (UID ${sameSubject[0]})`);
-                if (item.openLoop && !item.live) warnings.push(`미해결 약속이 LIVE가 아니어서 이후 자동 갱신 불가: ${item.title}`);
+                if (sameSubject) warnings.push(lt('ll.649db7fab77141ba')`Check the existing entry for this subject: ${item.title} (UID ${sameSubject[0]})`);
+                if (item.openLoop && !item.live) warnings.push(lt('ll.e16ac0237613091a')`This unresolved matter is not LIVE and cannot be updated automatically: ${item.title}`);
                 if (contents.has(normalizeMemory(body))) {
-                    warnings.push(`동일 본문 중복 제외: ${item.title}`);
+                    warnings.push(lt('ll.cc4a917a61e7f3e2')`Excluded identical content: ${item.title}`);
                     continue;
                 }
                 for (const existing of Object.values(data.entries || {}).filter(e => !e.disable)) {
@@ -104,7 +105,7 @@ export function validateProposal(raw, data, metadata, processedIndices) {
                     const intersection = [...a].filter(t => b.has(t)).length;
                     const union = new Set([...a, ...b]).size;
                     if (union > 8 && intersection / union > 0.65) {
-                        warnings.push(`중복 후보 확인: ${item.title} ↔ ${existing.comment}`);
+                        warnings.push(lt('ll.2e90c510b4cb753c')`Check possible duplication: ${item.title} ↔ ${existing.comment}`);
                         break;
                     }
                 }
@@ -112,7 +113,7 @@ export function validateProposal(raw, data, metadata, processedIndices) {
             } else {
                 const uid = String(item.uid);
                 if (!data.entries?.[uid] || data.entries[uid].disable || !metadata[uid]?.live || used.has(uid)) {
-                    throw new Error(`수정할 수 없거나 중복된 UID: ${uid}`);
+                    throw new Error(lt('ll.9b27f7b176d3f7dd')`Invalid, non-updatable, or duplicate UID: ${uid}`);
                 }
                 used.add(uid);
                 const meta = metadata[uid];
@@ -121,7 +122,7 @@ export function validateProposal(raw, data, metadata, processedIndices) {
                 if (normalizeMemory(body) === normalizeMemory(data.entries[uid].content) && !metadataChanged) continue;
             }
             if (/\b(still ambiguous|not yet ready|bond deepened|remain\w* ambiguous)\b/i.test(body)) {
-                warnings.push(`관계 해석 확인 필요: ${item.title || data.entries[item.uid]?.comment}`);
+                warnings.push(lt('ll.03cb1df756a7a3b6')`Check relationship interpretation: ${item.title || data.entries[item.uid]?.comment}`);
             }
             changes.push({ ...item, type, sourceMessages: [...new Set(item.sourceMessages)] });
         }

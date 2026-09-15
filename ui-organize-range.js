@@ -1,3 +1,4 @@
+import { l, lt } from './i18n.js';
 /**
  * UI — 기억 정리 범위 선택 모달.
  * 전체 정리 vs 메시지 ID 구간 지정. 실제 정리 실행은 호출자가 넘긴 onConfirm 콜백이 담당
@@ -14,38 +15,38 @@ export function openOrganizeRangeModal(chatLength, onConfirm) {
 
     const modal = document.createElement('dialog');
     modal.className = 'll-range-modal';
-    modal.innerHTML = `
+    modal.innerHTML = lt('ll.b19ad2f48878119c')`
         <div class="ll-range-header">
-            <div class="ll-range-title"><i class="fa-solid fa-broom"></i> 기억 정리 범위</div>
+            <div class="ll-range-title"><i class="fa-solid fa-broom"></i> Organize Memories</div>
             <button class="ll-range-close"><i class="fa-solid fa-xmark"></i></button>
         </div>
         <div class="ll-range-body">
             <div class="ll-range-option">
                 <label class="ll-range-radio-label">
                     <input type="radio" name="ll_range_mode" value="all" checked />
-                    <span>전체 대화 정리</span>
-                    <small>현재 채팅의 모든 메시지를 분석</small>
+                    <span>Entire conversation</span>
+                    <small>Analyze all eligible messages in this chat</small>
                 </label>
             </div>
             <div class="ll-range-option">
                 <label class="ll-range-radio-label">
                     <input type="radio" name="ll_range_mode" value="range" />
-                    <span>범위 지정</span>
-                    <small>특정 메시지 ID 구간만 분석 (0 ~ ${chatLength - 1})</small>
+                    <span>Choose a range</span>
+                    <small>Analyze a range of message IDs (0– ${chatLength - 1})</small>
                 </label>
                 <div class="ll-range-inputs">
-                    <input type="number" id="ll_range_start" min="0" max="${chatLength - 1}" placeholder="시작 ID" />
+                    <input type="number" id="ll_range_start" min="0" max="${chatLength - 1}" placeholder="Start ID" />
                     <span>~</span>
-                    <input type="number" id="ll_range_end" min="0" max="${chatLength - 1}" placeholder="끝 ID" value="${chatLength - 1}" />
+                    <input type="number" id="ll_range_end" min="0" max="${chatLength - 1}" placeholder="End ID" value="${chatLength - 1}" />
                 </div>
             </div>
             <div class="ll-range-hint">
-                * 메시지 ID는 채팅창의 메시지 번호 (0부터 시작)
+                * Message IDs are the numbers shown in chat, starting at 0.
             </div>
         </div>
         <div class="ll-range-footer">
-            <button class="ll-range-btn ll-range-cancel">취소</button>
-            <button class="ll-range-btn ll-range-confirm">정리 실행</button>
+            <button class="ll-range-btn ll-range-cancel">Cancel</button>
+            <button class="ll-range-btn ll-range-confirm">Organize</button>
         </div>
     `;
 
@@ -73,7 +74,7 @@ export function openOrganizeRangeModal(chatLength, onConfirm) {
             const start = parseInt(modal.querySelector('#ll_range_start')?.value, 10);
             const end = parseInt(modal.querySelector('#ll_range_end')?.value, 10);
             if (isNaN(start) || isNaN(end) || start > end) {
-                toastr.warning('유효한 범위를 입력해주세요.');
+                toastr.warning(l('ll.98e03f213d46805e', "Enter a valid range."));
                 return;
             }
             options = { rangeStart: start, rangeEnd: end };

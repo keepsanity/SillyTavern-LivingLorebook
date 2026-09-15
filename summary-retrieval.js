@@ -1,3 +1,4 @@
+import { l, lt } from './i18n.js';
 import { rankMemories, fitMemoryBudget } from './retrieval-policy.js';
 /**
  * Summary-based Retrieval — 매 generation 직전 AI가 summary 보고 top-N 엔트리 선택
@@ -165,7 +166,7 @@ function showSelectionIndicator(timeoutMs) {
         if (formSheld && !formSheld.querySelector('.ll-selecting-pill')) {
             const pill = document.createElement('div');
             pill.className = 'll-selecting-pill';
-            pill.innerHTML = '<i class="fa-solid fa-brain fa-fade"></i> 로어 선택 중…';
+            pill.innerHTML = l('ll.a10917a5d8811bbd', "<i class=\"fa-solid fa-brain fa-fade\"></i> Selecting memories…");
             formSheld.appendChild(pill);
         }
         document.getElementById('send_but')?.classList.add('ll-selecting');
@@ -215,7 +216,7 @@ export async function selectEntries(chat) {
     const run = (async () => {
         if (settings.selectionEngine === 'hybrid') {
             try { await autoReindexStaleLorebooks(); }
-            catch (err) { console.warn('[LivingLorebook] 재색인 실패; 검색 폴백 사용', err); }
+            catch (err) { console.warn(l('ll.51defaf6152ec432', "[LivingLorebook] Reindex failed; using retrieval fallback"), err); }
         }
         if (epoch !== _selectionEpoch || !isOperationCurrent(op)) return { entries: [], stage: 'stale-discarded', fromCache: false };
         const result = await _selectEntriesImpl(snapshot);
@@ -229,7 +230,7 @@ export async function selectEntries(chat) {
             perLorebook[e.lorebookName].tokens += e.tokens;
         }
         _lastInjection = { totalTokens: fitted.tokens, entryCount: fitted.entries.length, perLorebook, timestamp: Date.now(), fromCache: result.fromCache };
-        _lastTrace = { entries: fitted.entries.map(e => ({ compositeKey: e.compositeKey, title: e.title, lorebookName: e.lorebookName, reason: e.reason || 'AI 선택', tokens: e.tokens })), omitted: fitted.omitted, stage: result.stage, actual: null };
+        _lastTrace = { entries: fitted.entries.map(e => ({ compositeKey: e.compositeKey, title: e.title, lorebookName: e.lorebookName, reason: e.reason || l('ll.85692c510bf4f3af', "AI selection"), tokens: e.tokens })), omitted: fitted.omitted, stage: result.stage, actual: null };
         return { ...result, entries: fitted.entries };
     })();
     _selectInflight.set(key, run);
@@ -286,7 +287,7 @@ export async function injectManagedEntriesIntoWI(lore) {
         }
     }
     if (added > 0) {
-        console.log(`${LOG_PREFIX} WI 후보에 managed 엔트리 ${added}개 주입 (books: ${books.join(', ')})`);
+        console.log(lt('ll.0930015fd74b6026')`${LOG_PREFIX} Injected managed WI candidates: ${added}entries (books: ${books.join(', ')})`);
     }
 }
 
@@ -313,7 +314,7 @@ async function collectPinnedEntries() {
                 title: entry.comment || 'untitled',
                 content: entry.content || '',
                 category: getMetadata(uid, lbName)?.category || 'fact',
-                summary: '', reason: '고정 기억',
+                summary: '', reason: l('ll.23ce4485c20f3de3', "Pinned memory"),
                 rawEntry: entry,
             });
         }
@@ -560,8 +561,8 @@ Maximum ${aiSelectK} entries. Output ONLY the JSON object.`;
             const isTimeout = String(err.message).includes('timeout');
             toastr.warning(
                 isTimeout
-                    ? `LL AI 선택 timeout (${(settings.selectionTimeoutMs / 1000) | 0}s) — 이전 캐시로 폴백`
-                    : `LL AI 선택 실패: ${err.message} — 폴백 사용`,
+                    ? lt('ll.17ea41095850e1a4')`LL AI selection timeout (${(settings.selectionTimeoutMs / 1000) | 0}s) — falling back to the previous cache`
+                    : lt('ll.76b02622c69a3dcd')`LL AI selection failed: ${err.message} — using fallback`,
                 'LivingLorebook',
                 { timeOut: 4000 },
             );
@@ -684,9 +685,9 @@ async function _vectorRanks(candidates, queryText, settings, lorebooks) {
     if (indexedSig && indexedSig !== currentSig) {
         if (_sigWarned !== currentSig) {
             _sigWarned = currentSig;
-            console.warn(`${LOG_PREFIX} 임베딩 소스 변경 감지: 인덱스=${indexedSig}, 현재=${currentSig} → 벡터 경로 중단. 재색인 필요.`);
+            console.warn(lt('ll.dd14a4d7ea3c9704')`${LOG_PREFIX} Embedding source changed: index=${indexedSig}, current=${currentSig} → vector retrieval stopped. Reindex required.`);
             // 생성 직전 경로라 여기서 던지면 답변이 막힘 — 알림 실패는 삼킨다
-            globalThis.toastr?.warning?.('임베딩 소스가 바뀌었습니다. LL 설정에서 벡터 재색인을 실행하세요.', 'LivingLorebook', { timeOut: 8000 });
+            globalThis.toastr?.warning?.(l('ll.44568dea891c41a6', "The embedding source changed. Reindex vectors in LL settings."), 'LivingLorebook', { timeOut: 8000 });
         }
         return { ranks: new Map(), ms: 0, note: 'source-changed' };
     }
@@ -735,12 +736,12 @@ async function _vectorRanks(candidates, queryText, settings, lorebooks) {
         await runQuery(threshold);
     } catch (err) {
         // 한 번에 조회하므로 실패는 전부 아니면 전무 — BM25 폴백에 맡긴다
-        note = 'query 실패';
+        note = l('ll.3d0e5f431231d01a', "query failed");
         console.warn(`${LOG_PREFIX} vector query-multi failed: ${err.message}`);
     }
 
     // 0개인데 에러도 아니면 "이번 턴엔 의미상 가까운 게 없다"는 정상 결과 — 실패와 구분해서 표시
-    if (ranks.size === 0 && !note) note = `유사도 ${threshold} 미만`;
+    if (ranks.size === 0 && !note) note = lt('ll.20860ed6f7695341')`Similarity ${threshold} below threshold`;
 
     return { ranks, ms: performance.now() - t0, note, threshold };
 }
@@ -818,7 +819,7 @@ function matchKeywordEntries(candidates, scanText) {
 function perBookLabel(entries, lorebooks) {
     const count = new Map(lorebooks.map(lb => [lb, 0]));
     for (const e of entries) count.set(e.lorebookName, (count.get(e.lorebookName) || 0) + 1);
-    return [...count.entries()].map(([lb, n]) => `${lb}: ${n}개`).join(' · ');
+    return [...count.entries()].map(([lb, n]) => lt('ll.c78b1f2124a49489')`${lb}: ${n}entries`).join(' · ');
 }
 
 async function _selectFast(candidates, queries, settings, lorebooks, engine) {
@@ -829,10 +830,10 @@ async function _selectFast(candidates, queries, settings, lorebooks, engine) {
     const ranked = buildCandidateRanker(candidates).search(queries.bm25, Math.max(maxK * 3, settings.bm25PrefilterK || 30));
     const ordered = rankMemories(candidates, {
         vectorRanks: vector.ranks, bm25Results: ranked, keywordHits: kwHits, text: queries.bm25, recentText: queries.vector, settings,
-        vectorUnavailable: engine === 'bm25' || vector.note === 'source-changed' || vector.note === 'query 실패' || vector.note === 'stale-index',
+        vectorUnavailable: engine === 'bm25' || vector.note === 'source-changed' || vector.note === l('ll.3d0e5f431231d01a', "query failed") || vector.note === 'stale-index',
     });
     return { entries: ordered.slice(0, maxK), fromCache: false,
-        stage: engine + (vector.note ? ' · ' + vector.note : '') + ' · 인물/연속성 우선' };
+        stage: engine + (vector.note ? ' · ' + vector.note : '') + l('ll.f79f71bee744e930', " · character/continuity priority") };
 }
 
 /**

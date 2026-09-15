@@ -1,3 +1,4 @@
+import { l, lt } from './i18n.js';
 /**
  * UI — 패널 본체: 생성/열고닫기/뷰 전환 + 타임라인 렌더 + 상태바.
  *
@@ -183,17 +184,17 @@ async function renderTimeline() {
         const names = world_names || [];
         const options = [...names].sort().map(n => `<option value="${n}">${n}</option>`).join('');
 
-        container.innerHTML = `
+        container.innerHTML = lt('ll.1655318359798587')`
             <div class="ll-empty">
                 <i class="fa-solid fa-book-open"></i>
-                <span>대상 로어북을 선택해주세요</span>
+                <span>Select a target lorebook</span>
                 <div class="ll-empty-actions">
                     <select class="ll-empty-select" id="ll_empty_lorebook">
-                        <option value="">-- 기존 로어북 선택 --</option>
+                        <option value="">-- Select an existing lorebook --</option>
                         ${options}
                     </select>
                     <button class="ll-empty-btn" id="ll_empty_create">
-                        <i class="fa-solid fa-plus"></i> 새 로어북 자동 생성
+                        <i class="fa-solid fa-plus"></i> Create a new lorebook automatically
                     </button>
                 </div>
             </div>`;
@@ -207,7 +208,7 @@ async function renderTimeline() {
             $('#ll_target_lorebook').val(val);
             renderTimeline();
             updateStatusBar();
-            toastr.success(`로어북 "${val}" 이 연결되었습니다.`);
+            toastr.success(lt('ll.da2d6ec0c7e03428')`Lorebook "${val}" connected.`);
         });
 
         // 새 로어북 자동 생성
@@ -221,11 +222,11 @@ async function renderTimeline() {
                 setChatLorebook(newName);
                 populateLorebookDropdown();
                 $('#ll_target_lorebook').val(newName);
-                toastr.success(`로어북 "${newName}" 이 생성되었습니다.`);
+                toastr.success(lt('ll.aaee532ee7551ea0')`Lorebook "${newName}" created.`);
                 renderTimeline();
                 updateStatusBar();
             } catch (err) {
-                toastr.error('로어북 생성에 실패했습니다.');
+                toastr.error(l('ll.74c8a7f620b71703', "Lorebook creation failed."));
             }
         });
 
@@ -249,10 +250,10 @@ async function renderTimeline() {
     }
 
     if (!data?.entries || Object.keys(data.entries).length === 0) {
-        container.innerHTML = `
+        container.innerHTML = lt('ll.28e283dd067c14da')`
             <div class="ll-empty">
                 <i class="fa-solid fa-brain"></i>
-                <span>엔트리가 없습니다. "세계관 생성"으로 시작해보세요!</span>
+                <span>No entries yet. "Generate World"to get started!</span>
             </div>`;
         return;
     }
@@ -333,21 +334,21 @@ async function renderTimeline() {
             rawContent = rawContent.replace(/^##\s+.*\r?\n/, '').trim();
 
             const pinnedClass = entry.pinned ? ' ll-entry-pinned' : '';
-            const pinBadge = entry.pinned ? ' <span class="ll-entry-pin-badge" title="핀됨 — 항상 inject"><i class="fa-solid fa-thumbtack"></i></span>' : '';
-            const liveBadge = entry.live ? ' <span class="ll-entry-live-badge" title="업데이트 대상 — 기억 정리 때 이 엔트리를 풀 내용으로 보내 갱신"><i class="fa-solid fa-rotate"></i> LIVE</span>' : '';
-            html += `
+            const pinBadge = entry.pinned ? l('ll.6fd3493aef19b96f', " <span class=\"ll-entry-pin-badge\" title=\"Pinned — selected subject to token limits\"><i class=\"fa-solid fa-thumbtack\"></i></span>") : '';
+            const liveBadge = entry.live ? l('ll.474aba08963d3982', " <span class=\"ll-entry-live-badge\" title=\"LIVE — full content is supplied for updates during organization\"><i class=\"fa-solid fa-rotate\"></i> LIVE</span>") : '';
+            html += lt('ll.b124c4643b64920a')`
                 <div class="ll-entry-card${disabledClass}${pinnedClass}" data-uid="${entry.uid}" data-category="${cat}" data-pinned="${entry.pinned ? '1' : '0'}" data-live="${entry.live ? '1' : '0'}">
                     <div class="ll-entry-header">
                         <div class="ll-entry-title">${escapeHtml(entry.title)}${pinBadge}${liveBadge}${entry.disabled ? ' <span class="ll-entry-hide-badge">HIDE</span>' : ''}</div>
                         <div class="ll-entry-actions">
-                            <button class="ll-entry-btn ll-entry-live${entry.live ? ' ll-entry-live-on' : ''}" title="${entry.live ? '업데이트 대상 해제' : '업데이트 대상 지정 (기억 정리 때 갱신)'}"><i class="fa-solid fa-rotate"></i></button>
-                            <button class="ll-entry-btn ll-entry-pin${entry.pinned ? ' ll-entry-pin-on' : ''}" title="${entry.pinned ? '핀 해제' : '핀 (항상 inject)'}"><i class="fa-solid fa-thumbtack"></i></button>
-                            <button class="ll-entry-btn ll-entry-edit" title="편집"><i class="fa-solid fa-pen"></i></button>
-                            <button class="ll-entry-btn ll-entry-hide" title="${entry.disabled ? '재활성화' : '하이드'}"><i class="fa-solid fa-${entry.disabled ? 'eye-slash' : 'eye'}"></i></button>
-                            <button class="ll-entry-btn ll-entry-delete" title="삭제"><i class="fa-solid fa-trash"></i></button>
+                            <button class="ll-entry-btn ll-entry-live${entry.live ? ' ll-entry-live-on' : ''}" title="${entry.live ? l('ll.f53457417f658cfe', "Disable LIVE updates") : l('ll.f0dc5b4719829c9b', "Enable LIVE updates during organization")}"><i class="fa-solid fa-rotate"></i></button>
+                            <button class="ll-entry-btn ll-entry-pin${entry.pinned ? ' ll-entry-pin-on' : ''}" title="${entry.pinned ? l('ll.e1777d5e11f3ff39', "Unpin") : l('ll.2d78c83690220f53', "Pin (always select)")}"><i class="fa-solid fa-thumbtack"></i></button>
+                            <button class="ll-entry-btn ll-entry-edit" title="Edit"><i class="fa-solid fa-pen"></i></button>
+                            <button class="ll-entry-btn ll-entry-hide" title="${entry.disabled ? l('ll.b29fccd8ae1ab9a3', "Enable") : l('ll.afa4bc3d67e162b2', "Hide")}"><i class="fa-solid fa-${entry.disabled ? 'eye-slash' : 'eye'}"></i></button>
+                            <button class="ll-entry-btn ll-entry-delete" title="Delete"><i class="fa-solid fa-trash"></i></button>
                         </div>
                     </div>
-                    ${entry.summary ? `<div class="ll-entry-summary" title="검색 힌트 (AI 선택용)"><i class="fa-solid fa-magnifying-glass-arrow-right"></i> ${escapeHtml(entry.summary)}</div>` : '<div class="ll-entry-summary ll-summary-missing" title="아직 summary가 없습니다. 설정 > Summary 일괄 생성 버튼을 눌러주세요."><i class="fa-solid fa-circle-exclamation"></i> summary 없음</div>'}
+                    ${entry.summary ? lt('ll.d339d6cb764ec191')`<div class="ll-entry-summary" title="Retrieval hint (AI selection)"><i class="fa-solid fa-magnifying-glass-arrow-right"></i> ${escapeHtml(entry.summary)}</div>` : l('ll.10cf3e69c40b00a0', "<div class=\"ll-entry-summary ll-summary-missing\" title=\"No summary yet. Optional for vector/hybrid; generate one in settings for AI selection.\"><i class=\"fa-solid fa-circle-exclamation\"></i> No summary</div>")}
                     <div class="ll-entry-content" data-raw="${escapeAttr(rawContent)}">${escapeHtml(rawContent)}</div>
                     ${keywordsHtml ? `<div class="ll-entry-keywords">${keywordsHtml}</div>` : ''}
                 </div>`;
@@ -357,10 +358,10 @@ async function renderTimeline() {
     }
 
     if (!html) {
-        html = `
+        html = lt('ll.25501aac852054db')`
             <div class="ll-empty">
                 <i class="fa-solid fa-filter"></i>
-                <span>이 카테고리에 해당하는 엔트리가 없습니다</span>
+                <span>No entries in this category</span>
             </div>`;
     }
 
@@ -493,17 +494,17 @@ export async function updateStatusBar() {
 function showStorageBreakdown() {
     const lorebooks = getEffectiveSelectionLorebooks();
     if (lorebooks.length === 0) {
-        toastr.info('등록된 selection 로어북이 없습니다.');
+        toastr.info(l('ll.70633f9f8ee30a6d', "No selection lorebooks registered."));
         return;
     }
     calculateSelectionStorage().then(stats => {
         const lines = lorebooks.map(name => {
             const s = stats.perLorebook[name] || { count: 0, tokens: 0, managed: false };
             const tag = s.managed ? '🟢' : '🟡';
-            return `${tag} ${name}: ${s.count}개 / ${s.tokens.toLocaleString()} 토큰`;
+            return lt('ll.a9f6c9915967031e')`${tag} ${name}: ${s.count}entries / ${s.tokens.toLocaleString()} tokens`;
         });
-        toastr.info(lines.join('<br>') + `<br><b>총 ${stats.total.count}개 / ${stats.total.tokens.toLocaleString()} 토큰</b>`,
-            '저장 토큰 breakdown', { escapeHtml: false, timeOut: 8000 });
+        toastr.info(lines.join('<br>') + lt('ll.b0ac7ff92a78e640')`<br><b>Total ${stats.total.count}entries / ${stats.total.tokens.toLocaleString()} tokens</b>`,
+            l('ll.8287f32fc832a5eb', "Stored Token Breakdown"), { escapeHtml: false, timeOut: 8000 });
     });
 }
 
@@ -511,17 +512,17 @@ function showInjectBreakdown() {
     const trace = getSelectionTrace();
     const dialog = document.createElement('dialog');
     dialog.className = 'll-memory-review';
-    const heading = document.createElement('h3'); heading.textContent = '기억 선택과 활성 결과'; dialog.append(heading);
+    const heading = document.createElement('h3'); heading.textContent = l('ll.89d9a031848421c9', "Memory Selection and Activation"); dialog.append(heading);
     const info = document.createElement('p');
-    info.textContent = trace.stage + (trace.actual === null ? ' · WI 결과 대기/미확인' : ' · WI 활성 ' + trace.actual.length + '개'); dialog.append(info);
+    info.textContent = trace.stage + (trace.actual === null ? l('ll.e9df6d75e3068852', " · WI result pending / unknown") : l('ll.64d939e27b39879f', " · WI activated: ") + trace.actual.length + l('ll.a57ab05712bfb600', "entries")); dialog.append(info);
     const actual = new Set((trace.actual || []).map(e => e.compositeKey));
     for (const e of trace.entries) {
         const p = document.createElement('p');
-        p.textContent = e.title + ' · ' + e.tokens + ' tokens · ' + e.reason + (trace.actual === null ? '' : actual.has(e.compositeKey) ? ' · 활성됨' : ' · WI에서 제외됨'); dialog.append(p);
+        p.textContent = e.title + ' · ' + e.tokens + ' tokens · ' + e.reason + (trace.actual === null ? '' : actual.has(e.compositeKey) ? l('ll.6a6200523596bf50', " · Activated") : l('ll.c2ed0dea3c3b6dfb', " · Excluded by WI")); dialog.append(p);
     }
     for (const e of trace.omitted) { const p = document.createElement('p'); p.textContent = e.title + ' · ' + e.reason; dialog.append(p); }
-    const note = document.createElement('p'); note.textContent = 'WI 활성은 최종 모델 요청 포함과 다를 수 있습니다. ST 예산·슬롯 설정도 적용됩니다.'; dialog.append(note);
-    const close = document.createElement('button'); close.textContent = '닫기'; close.onclick = () => { dialog.close(); dialog.remove(); }; dialog.append(close);
+    const note = document.createElement('p'); note.textContent = l('ll.d666f319ee9cc61a', "WI activation may differ from inclusion in the final model request. ST budgets and slots still apply."); dialog.append(note);
+    const close = document.createElement('button'); close.textContent = l('ll.1e8c10206f5b35bd', "Close"); close.onclick = () => { dialog.close(); dialog.remove(); }; dialog.append(close);
     dialog.addEventListener('cancel', () => dialog.remove()); document.body.append(dialog); dialog.showModal();
 }
 

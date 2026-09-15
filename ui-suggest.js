@@ -1,3 +1,4 @@
+import { l, lt } from './i18n.js';
 /**
  * UI — 세계관 제안 모달.
  * 캐릭터/페르소나 + 유저 요구사항을 AI에 보내 엔트리를 제안받고, 고른 것만 생성.
@@ -21,48 +22,48 @@ export function createSuggestModal() {
 
     const modal = document.createElement('dialog');
     modal.className = 'll-suggest-modal';
-    modal.innerHTML = `
+    modal.innerHTML = lt('ll.d06480d8543c18a8')`
         <div class="ll-suggest-header">
             <div class="ll-suggest-title">
-                <i class="fa-solid fa-wand-magic-sparkles"></i> 세계관 제안
+                <i class="fa-solid fa-wand-magic-sparkles"></i> World Suggestions
             </div>
-            <button class="ll-suggest-close" title="닫기">
+            <button class="ll-suggest-close" title="Close">
                 <i class="fa-solid fa-xmark"></i>
             </button>
         </div>
 
         <div class="ll-suggest-body">
             <div class="ll-suggest-section">
-                <label class="ll-suggest-label">내가 넣고싶은 설정 (선택)</label>
+                <label class="ll-suggest-label">Extra world details (optional)</label>
                 <textarea class="ll-suggest-req" id="ll_suggest_req" rows="4"
-                    placeholder="예시: 주인공 집은 원룸이고, 친구는 한국계 2세야. 동네에 있는 카페 2개 정도 넣어줘..."></textarea>
+                    placeholder="Example: the protagonist lives in a studio apartment; add two nearby cafés..."></textarea>
                 <div class="ll-suggest-actions-top">
                     <button class="ll-suggest-btn ll-suggest-btn-secondary" id="ll_suggest_regen">
-                        <i class="fa-solid fa-arrows-rotate"></i> 제안 받기 / 다시 받기
+                        <i class="fa-solid fa-arrows-rotate"></i> Get / Refresh Suggestions
                     </button>
                 </div>
             </div>
 
             <div class="ll-suggest-section">
                 <div class="ll-suggest-list-header">
-                    <label class="ll-suggest-label">제안된 엔트리</label>
+                    <label class="ll-suggest-label">Suggested Entries</label>
                     <div class="ll-suggest-list-controls">
-                        <button class="ll-suggest-mini-btn" id="ll_suggest_all">전체 선택</button>
-                        <button class="ll-suggest-mini-btn" id="ll_suggest_none">전체 해제</button>
+                        <button class="ll-suggest-mini-btn" id="ll_suggest_all">Select All</button>
+                        <button class="ll-suggest-mini-btn" id="ll_suggest_none">Deselect All</button>
                     </div>
                 </div>
                 <div class="ll-suggest-list" id="ll_suggest_list">
                     <div class="ll-suggest-empty">
-                        아직 제안이 없습니다. 위의 "제안 받기" 버튼을 눌러주세요.
+                        No suggestions yet. Click "Get Suggestions" above.
                     </div>
                 </div>
             </div>
         </div>
 
         <div class="ll-suggest-footer">
-            <button class="ll-suggest-btn ll-suggest-btn-cancel" id="ll_suggest_cancel">취소</button>
+            <button class="ll-suggest-btn ll-suggest-btn-cancel" id="ll_suggest_cancel">Cancel</button>
             <button class="ll-suggest-btn ll-suggest-btn-primary" id="ll_suggest_generate">
-                <i class="fa-solid fa-check"></i> 선택한 항목 생성
+                <i class="fa-solid fa-check"></i> Create Selected Entries
             </button>
         </div>
     `;
@@ -89,7 +90,7 @@ export function createSuggestModal() {
 
 export function openSuggestModal() {
     if (!getSettings().targetLorebook) {
-        toastr.warning('대상 로어북을 먼저 선택해주세요.');
+        toastr.warning(l('ll.1c7e28934a4ba644', "Select a target lorebook first."));
         return;
     }
     suggestState.suggestions = [];
@@ -114,17 +115,17 @@ function renderSuggestList() {
     if (!list) return;
 
     if (suggestState.suggestions.length === 0) {
-        list.innerHTML = `<div class="ll-suggest-empty">아직 제안이 없습니다. 위의 "제안 받기" 버튼을 눌러주세요.</div>`;
+        list.innerHTML = lt('ll.c3fe3c83c38f85d9')`<div class="ll-suggest-empty">No suggestions yet. Click "Get Suggestions" above.</div>`;
         return;
     }
 
     const catLabels = {
-        arc: '줄거리',
-        character: '캐릭터', relationship: '관계', location: '장소',
-        event: '사건', routine: '일상', item: '아이템', fact: '설정',
+        arc: l('ll.687bf8f66ea0f585', "Story Arc"),
+        character: l('ll.280f69c4a593505d', "Characters"), relationship: l('ll.18ab6599abaaab1b', "Relationships"), location: l('ll.61eaecc09cb7e53d', "Locations"),
+        event: l('ll.d04be92d4a8150be', "Events"), routine: l('ll.2513c886e137082c', "Routines"), item: l('ll.976d37728f17ec71', "Items"), fact: l('ll.115bced49291a6a0', "Settings"),
     };
 
-    list.innerHTML = suggestState.suggestions.map((s, i) => `
+    list.innerHTML = suggestState.suggestions.map((s, i) => lt('ll.7ecf3d93b2056aab')`
         <div class="ll-suggest-item" data-idx="${i}">
             <label class="ll-suggest-item-head">
                 <input type="checkbox" class="ll-suggest-item-check" checked />
@@ -133,10 +134,10 @@ function renderSuggestList() {
                         `<option value="${k}"${s.category === k ? ' selected' : ''}>${v}</option>`,
                     ).join('')}
                 </select>
-                <input type="text" class="ll-suggest-item-title" value="${escapeAttr(s.title || '')}" placeholder="제목" />
+                <input type="text" class="ll-suggest-item-title" value="${escapeAttr(s.title || '')}" placeholder="Title" />
             </label>
             <div class="ll-suggest-item-reason">${escapeHtml(s.reason || '')}</div>
-            <textarea class="ll-suggest-item-draft" rows="2" placeholder="추가 메모 / 초안 (선택)">${escapeHtml(s.content || '')}</textarea>
+            <textarea class="ll-suggest-item-draft" rows="2" placeholder="Extra notes / draft (optional)">${escapeHtml(s.content || '')}</textarea>
         </div>
     `).join('');
 }
@@ -150,8 +151,8 @@ async function handleSuggestRegenerate() {
     suggestState.userRequirements = document.getElementById('ll_suggest_req')?.value || '';
 
     btn.disabled = true;
-    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 제안 생성 중...';
-    list.innerHTML = `<div class="ll-suggest-empty"><i class="fa-solid fa-spinner fa-spin"></i> AI 분석 중...</div>`;
+    btn.innerHTML = l('ll.078fcb8d0ea5bc2b', "<i class=\"fa-solid fa-spinner fa-spin\"></i> Generating suggestions...");
+    list.innerHTML = lt('ll.929223a6ed4c5376')`<div class="ll-suggest-empty"><i class="fa-solid fa-spinner fa-spin"></i> AI analysis in progress...</div>`;
 
     try {
         const suggestions = await suggestWorldEntries(
@@ -160,14 +161,14 @@ async function handleSuggestRegenerate() {
         );
         suggestState.suggestions = suggestions;
         renderSuggestList();
-        toastr.success(`${suggestions.length}개의 제안을 받았습니다.`);
+        toastr.success(lt('ll.2f018ef85a1718d1')`${suggestions.length}suggestions received.`);
     } catch (err) {
         console.error(`${LOG_PREFIX} Suggest failed:`, err);
-        toastr.error(err.message || '제안 받기에 실패했습니다.');
-        list.innerHTML = `<div class="ll-suggest-empty">제안 받기 실패. 다시 시도해주세요.</div>`;
+        toastr.error(err.message || l('ll.31f6d430e401ad66', "Could not get suggestions."));
+        list.innerHTML = lt('ll.497dcd6122b4a172')`<div class="ll-suggest-empty">Suggestion request failed. Try again.</div>`;
     } finally {
         btn.disabled = false;
-        btn.innerHTML = '<i class="fa-solid fa-arrows-rotate"></i> 제안 받기 / 다시 받기';
+        btn.innerHTML = l('ll.7fa9c178eda3952e', "<i class=\"fa-solid fa-arrows-rotate\"></i> Get / Refresh Suggestions");
     }
 }
 
@@ -188,29 +189,29 @@ async function handleSuggestGenerate() {
     });
 
     if (items.length === 0) {
-        toastr.warning('선택된 항목이 없습니다.');
+        toastr.warning(l('ll.8b025aefd221810a', "No items selected."));
         return;
     }
 
     const btn = document.getElementById('ll_suggest_generate');
     if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 생성 중...';
+        btn.innerHTML = l('ll.33b25c5cc3a6db8e', "<i class=\"fa-solid fa-spinner fa-spin\"></i> Creating...");
     }
 
     try {
         const userReq = document.getElementById('ll_suggest_req')?.value || '';
         const created = await generateFromSuggestions(items, suggestState.characterContext, userReq);
-        toastr.success(`${created.length}개의 엔트리가 생성되었습니다.`);
+        toastr.success(lt('ll.12f2f7ea0eb9e8fc')`${created.length}entries created.`);
         closeSuggestModal();
         refreshPanel();
     } catch (err) {
         console.error(`${LOG_PREFIX} Generate from suggestions failed:`, err);
-        toastr.error(err.message || '엔트리 생성에 실패했습니다.');
+        toastr.error(err.message || l('ll.a5f8da63ba2ccd44', "Entry creation failed."));
     } finally {
         if (btn) {
             btn.disabled = false;
-            btn.innerHTML = '<i class="fa-solid fa-check"></i> 선택한 항목 생성';
+            btn.innerHTML = l('ll.3c0e2e80026affe6', "<i class=\"fa-solid fa-check\"></i> Create Selected Entries");
         }
     }
 }

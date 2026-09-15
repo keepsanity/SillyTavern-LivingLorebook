@@ -1,3 +1,4 @@
+import { l, lt } from './i18n.js';
 /**
  * UI — 설정 뷰 (패널의 톱니 아이콘). 입력 바인딩 + 로어북 선택 소스 관리 + 벡터 인덱스 상태.
  *
@@ -31,7 +32,7 @@ export function refreshVectorStatus() {
 async function handleBackfillSummaries(btn, statusEl) {
     const settings = getSettings();
     if (!settings.targetLorebook) {
-        toastr.warning('대상 로어북을 먼저 선택해주세요.');
+        toastr.warning(l('ll.1c7e28934a4ba644', "Select a target lorebook first."));
         return;
     }
     if (btn.dataset.busy === '1') return;
@@ -39,29 +40,29 @@ async function handleBackfillSummaries(btn, statusEl) {
     btn.dataset.busy = '1';
     btn.disabled = true;
     const origLabel = btn.innerHTML;
-    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 생성 중...';
-    if (statusEl) statusEl.textContent = '시작...';
+    btn.innerHTML = l('ll.33b25c5cc3a6db8e', "<i class=\"fa-solid fa-spinner fa-spin\"></i> Creating...");
+    if (statusEl) statusEl.textContent = l('ll.55caf238b4c6dff9', "Starting...");
 
     try {
         const result = await backfillSummaries({
             onProgress: (done, total) => {
-                if (statusEl) statusEl.textContent = `${done} / ${total} 처리됨`;
+                if (statusEl) statusEl.textContent = lt('ll.d17faefc1395f700')`${done} / ${total} processed`;
             },
         });
 
         if (result.total === 0) {
-            toastr.info('Summary가 필요한 엔트리가 없습니다.');
-            if (statusEl) statusEl.textContent = '대상 없음 (모든 엔트리에 이미 summary 있음)';
+            toastr.info(l('ll.185c436d53f2bce9', "No entries need summaries."));
+            if (statusEl) statusEl.textContent = l('ll.ff4d4faac11dcea6', "Nothing to do (all entries have summaries)");
         } else {
-            const msg = `${result.filled}/${result.total}개 summary 생성 완료${result.failed > 0 ? ` (실패 ${result.failed})` : ''}`;
+            const msg = lt('ll.89da6830b15343ff')`${result.filled}/${result.total}summaries generated${result.failed > 0 ? lt('ll.36de58b69e9e593d')` (failed: ${result.failed})` : ''}`;
             toastr.success(msg);
             if (statusEl) statusEl.textContent = msg;
         }
         await refreshPanel();
     } catch (err) {
         console.error(`${LOG_PREFIX} Backfill failed:`, err);
-        toastr.error(err.message || 'Summary 생성에 실패했습니다.');
-        if (statusEl) statusEl.textContent = `실패: ${err.message || '알 수 없는 오류'}`;
+        toastr.error(err.message || l('ll.b64eaa4941548c85', "Summary generation failed."));
+        if (statusEl) statusEl.textContent = lt('ll.84a977e9593c779a')`Failed: ${err.message || l('ll.6a72b554a7c28caf', "Unknown error")}`;
     } finally {
         btn.dataset.busy = '';
         btn.disabled = false;
@@ -106,7 +107,7 @@ export function bindSettingsInputs(panel) {
     });
 
     // 선택 엔진에 따라 고급 튜닝 파라미터 표시/숨김
-    const ENGINE_SHORT = { hybrid: '스마트', bm25: '단어 매칭', ai: 'AI 정밀' };
+    const ENGINE_SHORT = { hybrid: l('ll.b0c87e8d4b9aa3c9', "Hybrid"), bm25: l('ll.a729418ad584ef42', "Lexical"), ai: l('ll.a3a80c64f2ed24af', "AI") };
     function updateEngineVisibility(engine) {
         const show = {
             '.ll-eng-fast':   engine !== 'ai',        // maxK / 컷오프
@@ -204,9 +205,9 @@ export function bindSettingsInputs(panel) {
 
     // 선택 엔진 + 벡터 파라미터
     const ENGINE_LABELS = {
-        hybrid: '스마트 (단어+의미)',
-        bm25: '단어 매칭 (임베딩 불필요)',
-        ai: 'AI 정밀 선택',
+        hybrid: l('ll.cb65ebd7fcabc593', "Hybrid (words + meaning)"),
+        bm25: l('ll.ffe49df2c8bef5b5', "Lexical (no embeddings)"),
+        ai: l('ll.c7fdb9c328432389', "AI selection"),
     };
     /** 이 엔진이 벡터 인덱스를 필요로 하는가 */
     const needsVector = (engine) => engine === 'hybrid' || engine === 'vector';
@@ -228,9 +229,9 @@ export function bindSettingsInputs(panel) {
             return;
         }
         const forAll = !!v.enabled_for_all;
-        el.innerHTML = `<span style="color:#f87171;">⚠ ST Vector Storage의 <b>"Enable for World Info"</b>가 켜져 있습니다`
-            + (forAll ? ` (+ <b>"Enabled for all entries"</b>) — managed 엔트리의 vectorized=false가 무시되어 <b>LL과 별개로 최대 ${v.max_entries ?? 5}개가 더 주입</b>됩니다.` : ' — LL이 통제하지 않는 엔트리가 따로 주입될 수 있습니다.')
-            + ` LL이 같은 일을 하므로 <b>끄시는 걸 권합니다.</b></span>`;
+        el.innerHTML = lt('ll.45fb312052e086db')`<span style="color:#f87171;">⚠ ST Vector Storage's <b>"Enable for World Info"</b>is enabled`
+            + (forAll ? lt('ll.3042e52086716d34')` (+ <b>"Enabled for all entries"</b>) — managed entries may bypass vectorized=false, allowing <b>up to ${v.max_entries ?? 5}extra entries</b>to be injected independently of LL.` : l('ll.f12cad4656e2bd48', " — entries outside LL control may be injected separately."))
+            + lt('ll.571969e452817ed1')` Since LL handles selection, consider <b>disabling this option.</b></span>`;
     }
 
     /** 현재 임베딩 소스 + 인덱스 시그니처 일치 여부를 패널에 표시 */
@@ -244,7 +245,7 @@ export function bindSettingsInputs(panel) {
         const { source, model } = getVectorSourceInfo();
         const current = `${source}:${model}`;
         const indexed = settings.vectorIndexSignature || '';
-        const label = `임베딩 소스: <b>${source}</b>${model ? ` / ${model}` : ''}`;
+        const label = lt('ll.fe48aa1f0b1d82e1')`Embedding source: <b>${source}</b>${model ? ` / ${model}` : ''}`;
 
         // managed 로어북이 하나도 없으면 인덱스 상태를 따질 것도 없다 —
         // LL은 managed 로어북만 읽으므로 선택도 재색인도 대상이 0개다.
@@ -280,22 +281,22 @@ export function bindSettingsInputs(panel) {
                 'managed 아님': notManaged,
                 'perLorebookMigrated': settings.perLorebookMigrated,
             };
-            console.warn(`${LOG_PREFIX} managed 0개 진단`, dump);
+            console.warn(lt('ll.95733d95717448e5')`${LOG_PREFIX} No Managed Lorebooks: Diagnostics`, dump);
 
             // 화면 문구 — 원인별로 갈라서 **구체적으로**
             let why;
             if (!scope.chatId) {
                 // ST에 열린 채팅이 없다 (this_chid undefined). 로어북이 없는 게 당연하다.
-                why = `<b>열린 채팅이 없습니다.</b> 채팅을 열면 그 채팅의 로어북을 읽습니다`;
+                why = lt('ll.06e36cbdcd60d9d2')`<b>No chat is open.</b> Open a chat to load its lorebook scope.`;
             } else if (claimed.length === 0) {
-                why = `<b>이 채팅에 지정된 로어북이 없습니다.</b> 위 <b>선택 소스 로어북</b>에서 target을 고르세요 (로어북은 <u>채팅마다 따로</u> 기억됩니다)`;
+                why = lt('ll.4ca0ecd9e2fe3868')`<b>No lorebook is assigned to this chat.</b> Select a target in <b>Selection Sources</b>above (lorebooks are saved <u>separately for each chat</u> )`;
             } else if (invalid.length > 0) {
                 // 이름은 있는데 ST의 로어북 목록에 없음 — 유니코드 표기 차이(NFC/NFD)나 이름 변경
-                why = `<b>이름이 ST 로어북 목록과 안 맞습니다</b> — ${invalid.map(n => `"${escapeHtml(n)}"`).join(', ')} (world_names ${names.length}개 중 없음). 로어북을 <b>다시 선택</b>해주세요`;
+                why = lt('ll.761ecf8aa9aec0c0')`<b>The name does not match ST's lorebook list</b> — ${invalid.map(n => `"${escapeHtml(n)}"`).join(', ')} (world_names ${names.length}entries). Please <b>select the lorebook again</b>to reconnect it`;
             } else if (notManaged.length > 0) {
-                why = `로어북 ${notManaged.length}개가 <b>managed가 아닙니다</b> (${escapeHtml(notManaged.join(', '))}) — 카드의 <b>managed 전환</b>을 눌러주세요`;
+                why = lt('ll.ce787c2c9a496466')`Lorebook ${notManaged.length}lorebooks are <b>not managed</b> (${escapeHtml(notManaged.join(', '))}) — use <b>Enable managed mode</b>on the lorebook card`;
             } else {
-                why = `원인 불명 — chat_metadata=[${claimed.map(escapeHtml).join(', ')}] / effective=[${effective.map(escapeHtml).join(', ')}]. 콘솔의 <b>managed 0개 진단</b>을 확인해주세요`;
+                why = lt('ll.e76a5aded2ea92db')`Unknown cause — chat_metadata=[${claimed.map(escapeHtml).join(', ')}] / effective=[${effective.map(escapeHtml).join(', ')}]. Check <b>No Managed Lorebooks: Diagnostics</b>in the console`;
             }
             el.innerHTML = `${label} · <span style="color:#f87171;">${why}</span>`;
             return;
@@ -317,12 +318,12 @@ export function bindSettingsInputs(panel) {
         const wrongSig = perLb.filter(p => p.indexed && p.count > 0 && !p.sigMatch);
 
         if (notIndexed.length) {
-            el.innerHTML = `${label} · <span style="opacity:0.7;">아직 색인 안 됨: <b>${notIndexed.map(p => p.name).join(', ')}</b> — 채팅 열면 자동 색인되거나, 재색인 버튼</span>`;
+            el.innerHTML = lt('ll.66fb6a8581938b58')`${label} · <span style="opacity:0.7;">Not indexed yet: <b>${notIndexed.map(p => p.name).join(', ')}</b> — opens/indexes with the chat, or use Reindex</span>`;
         } else if (wrongSig.length) {
-            el.innerHTML = `${label} · <span style="color:#f87171;">임베딩 소스가 바뀜 — 재색인 필요: <b>${wrongSig.map(p => p.name).join(', ')}</b></span>`;
+            el.innerHTML = lt('ll.ff2037fb4bf699c1')`${label} · <span style="color:#f87171;">Embedding source changed — reindex required: <b>${wrongSig.map(p => p.name).join(', ')}</b></span>`;
         } else {
-            const per = perLb.map(p => `${p.name} ${p.count}개`).join(' · ');
-            el.innerHTML = `${label} · <span style="color:#4ade80;">인덱스 일치 (${per})</span>`;
+            const per = perLb.map(p => lt('ll.65b7f647e2609907')`${p.name} ${p.count}entries`).join(' · ');
+            el.innerHTML = lt('ll.29d8b3549721e60d')`${label} · <span style="color:#4ade80;">Index matches (${per})</span>`;
         }
     }
     // 채팅 바뀔 때 밖(CHAT_CHANGED)에서도 이 상태줄을 다시 그릴 수 있게 참조 노출
@@ -342,7 +343,7 @@ export function bindSettingsInputs(panel) {
             saveSettings();
             clearSelectionCache();
             updateEngineVisibility(engineEl.value);
-            toastr.info(`선택 엔진: ${ENGINE_LABELS[engineEl.value] || engineEl.value}`);
+            toastr.info(lt('ll.8eae4aa7642e1367')`Selection engine: ${ENGINE_LABELS[engineEl.value] || engineEl.value}`);
             // 벡터를 쓰는 엔진 + 마스터 ON + 아직 색인 없음이면 자동 재색인 1회.
             // (이미 색인돼 있으면 사용자가 명시적으로 누를 때만 — 큰 로어북에서 임베딩 비용이 든다)
             if (needsVector(engineEl.value) && settings.summarySelectionEnabled && !settings.vectorIndexSignature) {
@@ -359,7 +360,7 @@ export function bindSettingsInputs(panel) {
             settings.keywordMatchEnabled = kwEl.checked;
             saveSettings();
             clearSelectionCache();
-            toastr.info(kwEl.checked ? '키워드 ON — 인물 이름 우선 확보, 사건 키워드 보완' : '키워드 OFF — 의미·단어 검색으로 선택');
+            toastr.info(kwEl.checked ? l('ll.cc2c26c3b5c783a0', "Keywords ON — prioritize names and supplement event retrieval") : l('ll.e35038b901c745aa', "Keywords OFF — select by meaning and words"));
         });
     }
 
@@ -396,16 +397,16 @@ export function bindSettingsInputs(panel) {
         const btn = panel.querySelector('#ll_s_reindex_btn');
         const status = panel.querySelector('#ll_s_reindex_status');
         if (btn) btn.disabled = true;
-        if (status) status.textContent = '재색인 중…';
+        if (status) status.textContent = l('ll.33ed621282bd8464', "Reindexing…");
         try {
             const { lorebooks, entries, signature } = await reindexManagedLorebooks();
             if (entries === 0) {
                 // managed 로어북이 없으면 색인할 게 없다 — 성공으로 위장하지 않는다
-                const warn = 'managed 로어북이 없어 색인할 게 없습니다. 위 목록에서 "managed 전환"을 누르세요.';
+                const warn = l('ll.5c2161db8c675f8f', "No managed lorebooks to index. Enable managed mode in the list above.");
                 if (status) status.textContent = warn;
                 toastr.warning(warn, 'LivingLorebook', { timeOut: 6000 });
             } else {
-                const msg = `재색인 완료: ${lorebooks}개 로어북 · ${entries}개 엔트리 (${signature})`;
+                const msg = lt('ll.8c4f0e786a4669e2')`Reindex complete: ${lorebooks}lorebooks · ${entries}entries (${signature})`;
                 if (status) status.textContent = msg;
                 if (silent) toastr.info(msg, 'LivingLorebook', { timeOut: 2500 });
                 else toastr.success(msg, 'LivingLorebook');
@@ -413,8 +414,8 @@ export function bindSettingsInputs(panel) {
             refreshVectorSourceStatus();
         } catch (err) {
             console.error('[LivingLorebook] reindex failed:', err);
-            if (status) status.textContent = `실패: ${err.message}`;
-            toastr.error(`재색인 실패: ${err.message}`, 'LivingLorebook');
+            if (status) status.textContent = lt('ll.84a977e9593c779a')`Failed: ${err.message}`;
+            toastr.error(lt('ll.81bbf175ce608146')`Reindex failed: ${err.message}`, 'LivingLorebook');
         } finally {
             if (btn) btn.disabled = false;
             _reindexInflight = false;
@@ -458,7 +459,7 @@ export function bindSettingsInputs(panel) {
                 const lbs = getEffectiveSelectionLorebooks();
                 const anyManaged = lbs.some(name => isManagedMode(name));
                 if (!anyManaged) {
-                    toastr.warning('먼저 어떤 로어북이든 하나는 "managed 전환"을 실행해주세요. 안 그러면 우리 모듈이 주입할 후보가 없습니다.');
+                    toastr.warning(l('ll.e999e2dfce40ba41', "Enable managed mode for at least one lorebook to provide LL selection candidates."));
                     selectionEnabledEl.checked = false;
                     return;
                 }
@@ -467,7 +468,7 @@ export function bindSettingsInputs(panel) {
             saveSettings();
             clearSelectionCache();
             const engine = settings.selectionEngine || 'hybrid';
-            toastr.info(`LL 자동 주입: ${settings.summarySelectionEnabled ? `ON (${ENGINE_LABELS[engine] || engine})` : 'OFF'}`);
+            toastr.info(lt('ll.70ce8189570973f0')`LL automatic selection: ${settings.summarySelectionEnabled ? `ON (${ENGINE_LABELS[engine] || engine})` : 'OFF'}`);
             // 켜면서 벡터를 쓰는 엔진인데 아직 색인이 없으면 자동 재색인 1회
             if (settings.summarySelectionEnabled && needsVector(engine) && !settings.vectorIndexSignature) {
                 performReindex({ silent: true });
@@ -504,13 +505,13 @@ export function bindSettingsInputs(panel) {
             populateTargetLorebookDropdown(panel);
             refreshPanel();
             refreshPanel();
-            toastr.info(val ? `Target → "${val}" (chat에 저장됨)` : 'Target 해제됨', 'LivingLorebook');
+            toastr.info(val ? lt('ll.41b36cf907bca81e')`Target → "${val}" (saved for this chat)` : l('ll.2088005969824e0e', "Target disconnected"), 'LivingLorebook');
         });
     }
     if (targetClearBtn) {
         targetClearBtn.addEventListener('click', () => {
             if (!settings.targetLorebook) return;
-            if (!window.confirm(`Target 로어북 "${settings.targetLorebook}" 연결을 해제합니다.\n\n로어북 자체는 삭제되지 않습니다. 계속?`)) return;
+            if (!window.confirm(lt('ll.97846e1910227d8d')`Target lorebook "${settings.targetLorebook}" will be disconnected.\n\nThe lorebook itself will not be deleted. Continue?`)) return;
             setChatLorebook('');
             $('#ll_target_lorebook').val('');
             clearSelectionCache();
@@ -519,7 +520,7 @@ export function bindSettingsInputs(panel) {
             populateTargetLorebookDropdown(panel);
             refreshPanel();
             refreshPanel();
-            toastr.info('Target 해제됨');
+            toastr.info(l('ll.2088005969824e0e', "Target disconnected"));
         });
     }
 
@@ -532,7 +533,7 @@ export function bindSettingsInputs(panel) {
         addBtn.addEventListener('click', () => {
             const val = addSelect.value;
             if (!val) {
-                toastr.warning('추가할 로어북을 선택해주세요.');
+                toastr.warning(l('ll.1cfae65d6e845784', "Select a lorebook to add."));
                 return;
             }
             const current = getChatSelectionLorebooks();
@@ -544,19 +545,19 @@ export function bindSettingsInputs(panel) {
                 settings_selection: settings.selectionLorebooks,
             });
             if (val === settings.targetLorebook) {
-                toastr.info(`"${val}"은 이미 target 로어북입니다 (자동 포함).`);
+                toastr.info(lt('ll.7df953bd156de633')`"${val}"is already the target lorebook (automatically included).`);
                 populateAddLorebookDropdown(panel);
                 return;
             }
             if (current.includes(val)) {
-                toastr.info(`"${val}"은 이미 selection 리스트에 있습니다.`);
+                toastr.info(lt('ll.2162be00b9c8ed8c')`"${val}"is already in the selection list.`);
                 populateAddLorebookDropdown(panel);
                 return;
             }
             setChatSelectionLorebooks([...current, val]);
             renderSelectionLorebookList(panel);
             populateAddLorebookDropdown(panel);
-            toastr.success(`"${val}" 추가됨`);
+            toastr.success(lt('ll.4a7e0ac862749631')`"${val}" added`);
         });
     }
 
@@ -575,7 +576,7 @@ export function bindSettingsInputs(panel) {
             };
             const ta = panel.querySelector(textareaMap[key]);
             if (ta) ta.value = settings[key];
-            toastr.info('프롬프트가 초기화되었습니다.');
+            toastr.info(l('ll.7f0177a6fd0bf085', "Prompt reset."));
         });
     });
 }

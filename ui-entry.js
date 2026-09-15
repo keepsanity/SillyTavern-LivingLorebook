@@ -1,3 +1,4 @@
+import { l, lt } from './i18n.js';
 /**
  * UI — 엔트리 편집/토글 액션 (타임라인 카드에서).
  * 인라인 편집 + 하이드/LIVE/핀 토글 + 삭제. 저장 후 refreshPanel()로 타임라인 갱신.
@@ -14,9 +15,9 @@ import { clearSelectionCache } from './summary-retrieval.js';
 const LOG_PREFIX = '[LivingLorebook]';
 
 const CATEGORY_LABELS = {
-    arc: '줄거리',
-    character: '캐릭터', relationship: '관계', location: '장소',
-    event: '사건', routine: '일상', item: '아이템', fact: '설정',
+    arc: l('ll.687bf8f66ea0f585', "Story Arc"),
+    character: l('ll.280f69c4a593505d', "Characters"), relationship: l('ll.18ab6599abaaab1b', "Relationships"), location: l('ll.61eaecc09cb7e53d', "Locations"),
+    event: l('ll.d04be92d4a8150be', "Events"), routine: l('ll.2513c886e137082c', "Routines"), item: l('ll.976d37728f17ec71', "Items"), fact: l('ll.category.fact', "Facts"),
 };
 
 export function openInlineEditor(card, uid) {
@@ -33,13 +34,13 @@ export function openInlineEditor(card, uid) {
 
     const editForm = document.createElement('div');
     editForm.className = 'll-entry-edit-form';
-    editForm.innerHTML = `
+    editForm.innerHTML = lt('ll.9fddc29bcbb92317')`
         <div class="ll-edit-row">
-            <label>제목</label>
+            <label>Title</label>
             <input type="text" class="ll-edit-title" value="${escapeAttr(title)}" />
         </div>
         <div class="ll-edit-row">
-            <label>카테고리</label>
+            <label>Category</label>
             <select class="ll-edit-cat">
                 ${Object.entries(CATEGORY_LABELS).map(([k, v]) =>
                     `<option value="${k}"${currentCat === k ? ' selected' : ''}>${v}</option>`,
@@ -47,25 +48,25 @@ export function openInlineEditor(card, uid) {
             </select>
         </div>
         <div class="ll-edit-row">
-            <label>내용</label>
+            <label>Content</label>
             <textarea class="ll-edit-content" rows="6">${escapeHtml(rawContent)}</textarea>
         </div>
         <div class="ll-edit-row">
-            <label>키워드 (쉼표 구분)</label>
+            <label>Keywords (comma-separated)</label>
             <input type="text" class="ll-edit-keywords" value="${escapeAttr(currentKeywords.join(', '))}" />
         </div>
-        <div class="ll-edit-row"><label>이름 / 별칭 (쉼표 구분)</label><input class="ll-edit-aliases" value="${escapeAttr((metadata.aliases || []).join(', '))}" /></div>
+        <div class="ll-edit-row"><label>Names / aliases (comma-separated)</label><input class="ll-edit-aliases" value="${escapeAttr((metadata.aliases || []).join(', '))}" /></div>
         <div class="ll-edit-memory-state">
             <label class="ll-edit-check">
                 <input class="ll-edit-open-loop" type="checkbox" ${metadata.openLoop ? 'checked' : ''} />
-                <span>미해결 사항</span>
+                <span>Unresolved matters</span>
             </label>
-            <div class="ll-edit-hint">아직 남아 있는 약속·목표·갈등에 표시합니다. 관련 인물이 언급될 때 우선 검색에 활용합니다.</div>
-            <div class="ll-edit-hint">${metadata.live ? 'LIVE 켜짐 · 기억 정리 때 AI가 완료 여부를 갱신할 수 있습니다.' : 'LIVE 꺼짐 · AI가 이 표시를 갱신하려면 엔트리의 LIVE를 켜주세요.'}</div>
+            <div class="ll-edit-hint">Mark outstanding promises, goals, or conflicts. Related name mentions can prioritize this memory.</div>
+            <div class="ll-edit-hint">${metadata.live ? l('ll.6b8db5457dbdb9f2', "LIVE is on · The AI can update completion status during memory organization.") : l('ll.82dba1ad43450e29', "LIVE is off · Enable LIVE on this entry to let the AI update this flag.")}</div>
         </div>
         <div class="ll-edit-actions">
-            <button class="ll-edit-cancel">취소</button>
-            <button class="ll-edit-save">저장</button>
+            <button class="ll-edit-cancel">Cancel</button>
+            <button class="ll-edit-save">Save</button>
         </div>
     `;
 
@@ -101,7 +102,7 @@ async function saveInlineEdit(card, uid, form) {
 
     try {
         const data = await loadTargetLorebook();
-        if (!data) throw new Error('로어북 로드 실패');
+        if (!data) throw new Error(l('ll.348562f0779ac6cd', "Could not load the lorebook."));
 
         updateEntryFields(data, uid, {
             title: newTitle,
@@ -117,11 +118,11 @@ async function saveInlineEdit(card, uid, form) {
         await saveLorebook(settings.targetLorebook, data);
         clearSelectionCache();
         refreshEditor();
-        toastr.success('저장되었습니다.');
+        toastr.success(l('ll.ba971bfea1b3477d', "Saved."));
         await refreshPanel();
     } catch (err) {
         console.error(`${LOG_PREFIX} Edit save failed:`, err);
-        toastr.error(err.message || '저장에 실패했습니다.');
+        toastr.error(err.message || l('ll.f9cf47b313962996', "Save failed."));
     }
 }
 
@@ -129,15 +130,15 @@ export async function handleEntryHideToggle(uid) {
     const settings = structuredClone(getSettings());
     try {
         const data = await loadTargetLorebook();
-        if (!data?.entries?.[uid]) throw new Error('엔트리를 찾을 수 없습니다');
+        if (!data?.entries?.[uid]) throw new Error(l('ll.1081a83f7d861645', "Entry not found."));
 
         const entry = data.entries[uid];
         if (entry.disable) {
             enableEntry(data, uid);
-            toastr.info('재활성화되었습니다.');
+            toastr.info(l('ll.87b4ad24d811b2bf', "Entry enabled."));
         } else {
             deactivateEntry(data, uid);
-            toastr.info('하이드되었습니다.');
+            toastr.info(l('ll.660d8489c2ec4c9c', "Entry hidden."));
         }
 
         await saveLorebook(settings.targetLorebook, data);
@@ -145,7 +146,7 @@ export async function handleEntryHideToggle(uid) {
         await refreshPanel();
     } catch (err) {
         console.error(`${LOG_PREFIX} Hide toggle failed:`, err);
-        toastr.error(err.message || '처리에 실패했습니다.');
+        toastr.error(err.message || l('ll.cd261a6ef8beab97', "Operation failed."));
     }
 }
 
@@ -158,11 +159,11 @@ export async function handleEntryLiveToggle(uid, live) {
         clearSelectionCache();
         await refreshPanel();
         toastr.info(live
-            ? '🔄 업데이트 대상 지정 — 기억 정리 때 이 엔트리를 갱신합니다.'
-            : '업데이트 대상 해제됨.');
+            ? l('ll.a07dbf2610209952', "🔄 LIVE enabled — this entry can be updated during memory organization.")
+            : l('ll.1f011581aa03d92a', "LIVE disabled."));
     } catch (err) {
         console.error(`${LOG_PREFIX} Live toggle failed:`, err);
-        toastr.error(err.message || '처리에 실패했습니다.');
+        toastr.error(err.message || l('ll.cd261a6ef8beab97', "Operation failed."));
     }
 }
 
@@ -170,35 +171,35 @@ export async function handleEntryPinToggle(uid, pinned) {
     const settings = structuredClone(getSettings());
     try {
         const data = await loadTargetLorebook();
-        if (!data?.entries?.[uid]) throw new Error('엔트리를 찾을 수 없습니다');
+        if (!data?.entries?.[uid]) throw new Error(l('ll.1081a83f7d861645', "Entry not found."));
 
         setEntryPinned(data, uid, pinned);
         await saveLorebook(settings.targetLorebook, data);
         refreshEditor();
         clearSelectionCache();
         await refreshPanel();
-        toastr.info(pinned ? '📌 핀됨 — 항상 inject됩니다.' : '핀 해제됨.');
+        toastr.info(pinned ? l('ll.6fcdaf275990fc70', "📌 Pinned — always selected, subject to token limits.") : l('ll.b6255d2040def1e1', "Unpinned."));
     } catch (err) {
         console.error(`${LOG_PREFIX} Pin toggle failed:`, err);
-        toastr.error(err.message || '처리에 실패했습니다.');
+        toastr.error(err.message || l('ll.cd261a6ef8beab97', "Operation failed."));
     }
 }
 
 export async function handleEntryDelete(uid) {
     const settings = structuredClone(getSettings());
-    if (!confirm('이 엔트리를 완전히 삭제하시겠습니까? 되돌릴 수 없습니다.')) return;
+    if (!confirm(l('ll.dec17b6f3883b782', "Permanently delete this entry? This cannot be undone."))) return;
 
     try {
         const data = await loadTargetLorebook();
-        if (!data?.entries?.[uid]) throw new Error('엔트리를 찾을 수 없습니다');
+        if (!data?.entries?.[uid]) throw new Error(l('ll.1081a83f7d861645', "Entry not found."));
 
         deleteEntry(data, uid, settings.targetLorebook);
         await saveLorebook(settings.targetLorebook, data);
         refreshEditor();
-        toastr.success('삭제되었습니다.');
+        toastr.success(l('ll.977dfc49dbc7d8b2', "Deleted."));
         await refreshPanel();
     } catch (err) {
         console.error(`${LOG_PREFIX} Delete failed:`, err);
-        toastr.error(err.message || '삭제에 실패했습니다.');
+        toastr.error(err.message || l('ll.f318d8a511e3ec54', "Delete failed."));
     }
 }

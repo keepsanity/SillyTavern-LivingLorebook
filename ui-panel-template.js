@@ -1,3 +1,4 @@
+import { lt } from './i18n.js';
 /**
  * UI — 패널 HTML 템플릿.
  * createPanel()이 innerHTML로 넣는 마크업 원본. 순수 문자열(로직 없음)이라
@@ -5,17 +6,17 @@
  * 셀렉터(id/class)와 짝이 맞는지 확인할 것.
  */
 
-export const PANEL_HTML = `
+export const PANEL_HTML = lt('ll.de3167c9f6f361c6')`
         <!-- Header -->
         <div class="ll-panel-header">
             <div class="ll-panel-title">
                 <i class="fa-solid fa-brain"></i>
                 Living Lorebook
             </div>
-            <button class="ll-panel-close ll-btn-settings" title="설정">
+            <button class="ll-panel-close ll-btn-settings" title="Settings">
                 <i class="fa-solid fa-gear"></i>
             </button>
-            <button class="ll-panel-close ll-btn-close" title="닫기">
+            <button class="ll-panel-close ll-btn-close" title="Close">
                 <i class="fa-solid fa-xmark"></i>
             </button>
         </div>
@@ -23,31 +24,31 @@ export const PANEL_HTML = `
         <!-- Toolbar -->
         <div class="ll-toolbar ll-main-toolbar">
             <button class="ll-toolbar-btn organize" data-action="organize">
-                <i class="fa-solid fa-broom"></i> 기억 정리
+                <i class="fa-solid fa-broom"></i> Organize Memories
             </button>
             <button class="ll-toolbar-btn add-entry" data-action="add-entry">
-                <i class="fa-solid fa-plus"></i> 새 엔트리
+                <i class="fa-solid fa-plus"></i> New Entry
             </button>
             <button class="ll-toolbar-btn arc" data-action="arc">
-                <i class="fa-solid fa-book-bookmark"></i> 줄거리
+                <i class="fa-solid fa-book-bookmark"></i> Story Arc
             </button>
             <details class="ll-more-actions">
-                <summary title="더보기" aria-label="추가 작업 더보기"><i class="fa-solid fa-ellipsis"></i><span>더보기</span></summary>
+                <summary title="More" aria-label="More actions"><i class="fa-solid fa-ellipsis"></i><span>More</span></summary>
                 <div class="ll-more-list">
-                    <button class="ll-toolbar-btn" data-action="undo-memory" title="최근 기억 정리를 복구합니다. 채팅 하이드와 자동 줄거리 갱신은 포함하지 않습니다."><i class="fa-solid fa-rotate-left"></i> 마지막 정리 되돌리기</button>
+                    <button class="ll-toolbar-btn" data-action="undo-memory" title="Restore the last memory organization. Chat hiding and automatic arc updates are not included."><i class="fa-solid fa-rotate-left"></i> Undo Last Organization</button>
                     <div class="ll-more-divider"></div>
-                    <button class="ll-toolbar-btn build" data-action="build"><i class="fa-solid fa-wand-magic-sparkles"></i> 세계관 생성</button>
-                    <button class="ll-toolbar-btn reorganize" data-action="reorganize"><i class="fa-solid fa-arrows-rotate"></i> 재구성</button>
-                    <button class="ll-toolbar-btn compress" data-action="compress"><i class="fa-solid fa-layer-group"></i> 기억 압축</button>
+                    <button class="ll-toolbar-btn build" data-action="build"><i class="fa-solid fa-wand-magic-sparkles"></i> Generate World</button>
+                    <button class="ll-toolbar-btn reorganize" data-action="reorganize"><i class="fa-solid fa-arrows-rotate"></i> Reorganize</button>
+                    <button class="ll-toolbar-btn compress" data-action="compress"><i class="fa-solid fa-layer-group"></i> Compress Memories</button>
                 </div>
             </details>
         </div>
 
         <!-- World description input (hidden by default) -->
         <div class="ll-world-input-row">
-            <input class="ll-world-input" type="text" placeholder="(선택) 추가 설정: 배경은 서울, 카페가 있음..." />
+            <input class="ll-world-input" type="text" placeholder="(Optional) Extra setting: a city apartment, a nearby café..." />
             <button class="ll-toolbar-btn build" data-action="build-confirm">
-                <i class="fa-solid fa-check"></i> 생성
+                <i class="fa-solid fa-check"></i> Create
             </button>
             <button class="ll-toolbar-btn" data-action="build-cancel">
                 <i class="fa-solid fa-xmark"></i>
@@ -56,15 +57,15 @@ export const PANEL_HTML = `
 
         <!-- Filter bar -->
         <div class="ll-filter-bar">
-            <button class="ll-filter-chip active" data-filter="all">전체</button>
-            <button class="ll-filter-chip" data-filter="arc"><i class="fa-solid fa-book-bookmark" style="margin-right:3px;font-size:10px;"></i>줄거리</button>
-            <button class="ll-filter-chip" data-filter="character"><i class="fa-solid fa-user" style="margin-right:3px;font-size:10px;"></i>캐릭터</button>
-            <button class="ll-filter-chip" data-filter="relationship"><i class="fa-solid fa-heart" style="margin-right:3px;font-size:10px;"></i>관계</button>
-            <button class="ll-filter-chip" data-filter="location"><i class="fa-solid fa-location-dot" style="margin-right:3px;font-size:10px;"></i>장소</button>
-            <button class="ll-filter-chip" data-filter="event"><i class="fa-solid fa-bolt" style="margin-right:3px;font-size:10px;"></i>사건</button>
-            <button class="ll-filter-chip" data-filter="routine"><i class="fa-solid fa-clock" style="margin-right:3px;font-size:10px;"></i>일상</button>
-            <button class="ll-filter-chip" data-filter="item"><i class="fa-solid fa-gem" style="margin-right:3px;font-size:10px;"></i>아이템</button>
-            <button class="ll-filter-chip" data-filter="fact"><i class="fa-solid fa-circle-info" style="margin-right:3px;font-size:10px;"></i>설정</button>
+            <button class="ll-filter-chip active" data-filter="all">All</button>
+            <button class="ll-filter-chip" data-filter="arc"><i class="fa-solid fa-book-bookmark" style="margin-right:3px;font-size:10px;"></i>Story Arc</button>
+            <button class="ll-filter-chip" data-filter="character"><i class="fa-solid fa-user" style="margin-right:3px;font-size:10px;"></i>Characters</button>
+            <button class="ll-filter-chip" data-filter="relationship"><i class="fa-solid fa-heart" style="margin-right:3px;font-size:10px;"></i>Relationships</button>
+            <button class="ll-filter-chip" data-filter="location"><i class="fa-solid fa-location-dot" style="margin-right:3px;font-size:10px;"></i>Locations</button>
+            <button class="ll-filter-chip" data-filter="event"><i class="fa-solid fa-bolt" style="margin-right:3px;font-size:10px;"></i>Events</button>
+            <button class="ll-filter-chip" data-filter="routine"><i class="fa-solid fa-clock" style="margin-right:3px;font-size:10px;"></i>Routines</button>
+            <button class="ll-filter-chip" data-filter="item"><i class="fa-solid fa-gem" style="margin-right:3px;font-size:10px;"></i>Items</button>
+            <button class="ll-filter-chip" data-filter="fact"><i class="fa-solid fa-circle-info" style="margin-right:3px;font-size:10px;"></i>Facts</button>
         </div>
 
         <!-- Timeline (main view) -->
@@ -72,140 +73,140 @@ export const PANEL_HTML = `
 
         <!-- Settings view (hidden by default) -->
         <div class="ll-settings-view" id="ll_settings_view">
-            <div class="ll-settings-section-title">기억 적용과 검색 예산</div>
-            <div class="ll-settings-row"><label>LL 선택 토큰 한도 (0=ST 예산 사용)</label><input class="ll-settings-input" id="ll_s_memory_budget" type="number" min="0" step="100" /></div>
-            <p class="ll-memory-guide">이름 직접 언급 시 인물 정보, 현재 관계와 열린 약속을 먼저 선택합니다. Summary 없이도 의미·단어 검색을 사용할 수 있습니다.</p>
+            <div class="ll-settings-section-title">Memory Token Budget</div>
+            <div class="ll-settings-row"><label>LL token cap (0 = no extra cap)</label><input class="ll-settings-input" id="ll_s_memory_budget" type="number" min="0" step="100" /></div>
+            <p class="ll-memory-guide">Direct names prioritize characters, current relationships, and unresolved commitments. Semantic and lexical retrieval work without summaries.</p>
             <div class="ll-settings-section-title">
-                <i class="fa-solid fa-map-pin"></i> 엔트리 삽입 위치
+                <i class="fa-solid fa-map-pin"></i> Entry Insertion Position
             </div>
             <div class="ll-settings-row">
-                <label>위치</label>
+                <label>Position</label>
                 <select class="ll-settings-input" id="ll_s_position">
-                    <option value="0">↑Char (캐릭터 정의 전)</option>
-                    <option value="1">↓Char (캐릭터 정의 후)</option>
-                    <option value="2">↑EM (예시 메시지 전)</option>
-                    <option value="3">↓EM (예시 메시지 후)</option>
-                    <option value="5">↑AN (작가노트 전)</option>
-                    <option value="6">↓AN (작가노트 후)</option>
+                    <option value="0">↑Char (before character definition)</option>
+                    <option value="1">↓Char (after character definition)</option>
+                    <option value="2">↑EM (before example messages)</option>
+                    <option value="3">↓EM (after example messages)</option>
+                    <option value="5">↑AN (before author's note)</option>
+                    <option value="6">↓AN (after author's note)</option>
                 </select>
             </div>
 
             <div class="ll-settings-section-title">
-                <i class="fa-solid fa-broom"></i> 기억 정리
+                <i class="fa-solid fa-broom"></i> Organize Memories
             </div>
-            <label class="checkbox_label"><input type="checkbox" id="ll_s_review_memories" />변경 전후와 근거를 검토한 뒤 적용</label>
+            <label class="checkbox_label"><input type="checkbox" id="ll_s_review_memories" />Review changes and sources before applying</label>
             <label class="checkbox_label">
                 <input id="ll_s_auto_arc_organize" type="checkbox" />
-                <span>줄거리 자동 생성 / 갱신 <span style="font-size:10px;opacity:0.6;">(첫 정리부터 · 완료 후 하이드)</span></span>
+                <span>Automatically create / update the story arc <span style="font-size:10px;opacity:0.6;">(from the first organization · before hiding)</span></span>
             </label>
             <div class="ll-settings-row">
-                <label>분석한 메시지 자동 하이드</label>
+                <label>Automatically hide processed messages</label>
                 <input class="ll-settings-input" id="ll_s_hide_after" type="checkbox" style="width:auto;" />
             </div>
             <div class="ll-settings-row">
-                <label>최근 N개 메시지 유지</label>
+                <label>Keep the latest N messages visible</label>
                 <input class="ll-settings-input" id="ll_s_hide_depth" type="number" min="0" max="1000" />
-                <span class="ll-settings-unit" style="font-size:11px;opacity:0.6;">0=전부</span>
+                <span class="ll-settings-unit" style="font-size:11px;opacity:0.6;">0 = hide all processed messages</span>
             </div>
 
             <div class="ll-settings-section-title">
-                <i class="fa-solid fa-arrows-rotate"></i> 재구성 시 기존 엔트리
+                <i class="fa-solid fa-arrows-rotate"></i> Original Entries After Reorganization
             </div>
             <div class="ll-settings-row">
-                <label>처리 방식</label>
+                <label>Handling</label>
                 <select class="ll-settings-input" id="ll_s_reorg_handling">
-                    <option value="hide">하이드 (비활성화, 복구 가능)</option>
-                    <option value="delete">삭제 (완전 제거)</option>
+                    <option value="hide">Hide (disable; recoverable)</option>
+                    <option value="delete">Delete (permanent)</option>
                 </select>
             </div>
             <div class="ll-settings-row">
-                <label>배치 크기</label>
+                <label>Batch size</label>
                 <input class="ll-settings-input" id="ll_s_reorg_batch" type="number" min="3" max="40" />
-                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">한 번에 AI에 보낼 엔트리 수. 작을수록 유실 위험 ↓, LLM 호출 수 ↑ (권장 10~15)</span>
+                <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">Entries per AI call. Smaller batches reduce loss risk but require more calls (suggested: 10–15).</span>
             </div>
 
             <div class="ll-settings-section-title">
-                <i class="fa-solid fa-layer-group"></i> 기억 압축
+                <i class="fa-solid fa-layer-group"></i> Compress Memories
             </div>
             <div class="ll-settings-row">
-                <label>Tier 2 압축률</label>
+                <label>Tier 2 length retained</label>
                 <input class="ll-settings-input" id="ll_s_tier2" type="number" min="10" max="90" />
                 <span class="ll-settings-unit">%</span>
             </div>
             <div class="ll-settings-row">
-                <label>Tier 3 압축률</label>
+                <label>Tier 3 length retained</label>
                 <input class="ll-settings-input" id="ll_s_tier3" type="number" min="5" max="50" />
                 <span class="ll-settings-unit">%</span>
             </div>
 
             <div class="ll-settings-section-title">
-                <i class="fa-solid fa-magnifying-glass-arrow-right"></i> Summary (검색 힌트)
+                <i class="fa-solid fa-magnifying-glass-arrow-right"></i> Summaries (retrieval hints)
             </div>
             <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:6px;">
                 <div style="font-size:11px;opacity:0.7;line-height:1.4;">
-                    엔트리마다 "언제 이 엔트리를 골라야 하는지" 한 줄 힌트를 저장합니다.
-                    기존 엔트리에 일괄 생성하려면 아래 버튼 클릭.
+                    Each entry stores a "when to select" hint.
+                    Use the button below to generate hints for existing entries.
                 </div>
                 <button class="menu_button" id="ll_s_backfill_btn" style="width:unset;white-space:nowrap;">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i> 기존 엔트리에 Summary 일괄 생성
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> Generate Missing Summaries
                 </button>
                 <div id="ll_s_backfill_status" style="font-size:11px;opacity:0.7;"></div>
             </div>
 
             <div class="ll-settings-section-title">
-                <i class="fa-solid fa-link"></i> 자동 체인
+                <i class="fa-solid fa-link"></i> Automatic Follow-up Tasks
             </div>
             <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:4px;">
                 <div style="font-size:11px;opacity:0.7;line-height:1.4;margin-bottom:4px;">
-                    기억 정리 / 재구성 끝나면 추가 작업 자동 실행. 매 호출에 LLM 1~2번 추가.
+                    Run additional tasks after organization / reorganization. These make additional AI calls.
                 </div>
                 <label class="checkbox_label">
                     <input id="ll_s_auto_backfill_organize" type="checkbox" />
-                    <span>기억 정리 후 자동 Summary 백필 <span style="font-size:10px;opacity:0.6;">(managed mode 한정, 새 entries만)</span></span>
+                    <span>Backfill summaries after organization <span style="font-size:10px;opacity:0.6;">(managed mode only; new entries)</span></span>
                 </label>
                 <label class="checkbox_label">
                     <input id="ll_s_auto_arc_reorganize" type="checkbox" />
-                    <span>재구성 후 자동 줄거리 업데이트 <span style="font-size:10px;opacity:0.6;">(기존 arc 있을 때만)</span></span>
+                    <span>Update the story arc after reorganization <span style="font-size:10px;opacity:0.6;">(only when an arc already exists)</span></span>
                 </label>
             </div>
 
             <div class="ll-settings-section-title">
-                <i class="fa-solid fa-microscope"></i> AI 선택 주입
+                <i class="fa-solid fa-microscope"></i> Memory Selection
             </div>
             <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:6px;">
                 <div style="font-size:11px;opacity:0.7;line-height:1.4;">
-                    매 생성 직전 이름·의미·단어 검색으로 필요한 기억을 선택합니다. AI 모드를 선택한 경우에만 summary를 사용합니다.
-                    아래 <b>선택 소스 로어북</b>에서 통제할 로어북을 등록하고, 각 로어북마다 <b>managed mode 전환</b>을 눌러 ST 자동 활성화를 끕니다 (이중 주입 방지).
+                    Select relevant memories before generation using names, meaning, and words. AI mode also uses summaries.
+                    Register lorebooks under <b>Selection Sources</b>below, then use <b>Enable managed mode</b>on each book to disable native activation and avoid duplicate injection.
                 </div>
             </div>
 
             <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
                 <div style="font-weight:bold;font-size:12px;">
-                    <i class="fa-solid fa-star" style="color:#fbbf24;"></i> Target 로어북 (쓰기 대상)
+                    <i class="fa-solid fa-star" style="color:#fbbf24;"></i> Target Lorebook (write destination)
                 </div>
                 <div style="display:flex;gap:6px;align-items:center;">
                     <select class="ll-settings-input" id="ll_s_target_lorebook" style="flex:1;">
-                        <option value="">(선택 안 됨)</option>
+                        <option value="">(None selected)</option>
                     </select>
-                    <button class="menu_button" id="ll_s_target_lorebook_clear" title="연결 해제" style="width:unset;padding:4px 8px;">
+                    <button class="menu_button" id="ll_s_target_lorebook_clear" title="Disconnect" style="width:unset;padding:4px 8px;">
                         <i class="fa-solid fa-xmark"></i>
                     </button>
                 </div>
                 <div style="font-size:10px;opacity:0.6;line-height:1.3;">
-                    organize / compress / arc가 새 entry를 만들 로어북. 항상 자동 포함됨.
+                    Organization, compression, and arcs write to this lorebook. It is always included as a source.
                 </div>
             </div>
 
             <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
                 <div style="font-weight:bold;font-size:12px;">
-                    <i class="fa-solid fa-layer-group"></i> 선택 소스 로어북 (읽기 대상 — 추가)
+                    <i class="fa-solid fa-layer-group"></i> Additional Lorebooks (read sources)
                 </div>
                 <div style="display:flex;gap:6px;align-items:center;">
                     <select class="ll-settings-input" id="ll_s_add_lorebook" style="flex:1;">
-                        <option value="">+ 추가할 로어북 선택...</option>
+                        <option value="">+ Select a lorebook to add...</option>
                     </select>
                     <button class="menu_button" id="ll_s_add_lorebook_btn" style="width:unset;white-space:nowrap;padding:4px 10px;">
-                        <i class="fa-solid fa-plus"></i> 추가
+                        <i class="fa-solid fa-plus"></i> Add
                     </button>
                 </div>
                 <div id="ll_s_lorebook_list" style="display:flex;flex-direction:column;gap:6px;"></div>
@@ -213,106 +214,106 @@ export const PANEL_HTML = `
             <div class="ll-settings-row">
                 <label class="checkbox_label" style="flex:1;">
                     <input id="ll_s_selection_enabled" type="checkbox" />
-                    <span>LL 자동 주입 사용 <span style="font-size:10px;opacity:0.6;">(마스터 — 켜면 LL이 통제, ST 키워드 off)</span></span>
+                    <span>Enable LL selection <span style="font-size:10px;opacity:0.6;">(LL controls managed entries; native keyword triggers are disabled)</span></span>
                 </label>
             </div>
             <div class="ll-settings-row">
-                <label>선택 엔진</label>
+                <label>Selection engine</label>
                 <select class="ll-settings-input" id="ll_s_selection_engine" style="width:unset;flex:1;text-align:left;">
-                    <option value="hybrid">스마트 (단어+의미) — 기본 권장</option>
-                    <option value="bm25">단어 매칭 (임베딩 불필요·무료)</option>
-                    <option value="ai">AI 정밀 선택 (느림)</option>
+                    <option value="hybrid">Hybrid (words + meaning) — recommended</option>
+                    <option value="bm25">Lexical matching (no embeddings)</option>
+                    <option value="ai">AI selection (slower)</option>
                 </select>
             </div>
-            <!-- ST 이중주입 경고 — 엔진 무관하게 항상 노출 (managed 로어북에 ST 벡터가 얹힐 수 있음) -->
+            <!-- Native ST injection warning -->
             <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;">
                 <div id="ll_s_conflict_warn" style="font-size:11px;line-height:1.4;"></div>
             </div>
 
-            <!-- 고급 튜닝 (접이식, 엔진별 표시) -->
+            <!-- Advanced settings by engine -->
             <div class="ll-settings-section-title ll-collapsible collapsed" data-toggle="ll_s_adv_tuning">
-                <i class="fa-solid fa-sliders"></i> 고급 튜닝
-                <span style="font-size:10px;opacity:0.5;font-weight:400;margin-left:auto;">엔진: <span id="ll_s_engine_label">스마트</span></span>
+                <i class="fa-solid fa-sliders"></i> Advanced Settings
+                <span style="font-size:10px;opacity:0.5;font-weight:400;margin-left:auto;">Engine: <span id="ll_s_engine_label">Hybrid</span></span>
                 <i class="fa-solid fa-chevron-down ll-collapse-chevron"></i>
             </div>
             <div class="ll-settings-group collapsed" id="ll_s_adv_tuning">
-                <!-- 스캔 범위 -->
+                <!-- Scan range -->
                 <div class="ll-settings-row">
-                    <label>채팅 스캔 깊이</label>
+                    <label>Conversation scan depth</label>
                     <input class="ll-settings-input" id="ll_s_scan_depth" type="number" min="1" max="50" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">최근 N msg — 전 엔진 공통</span>
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">Latest N messages — all engines</span>
                 </div>
                 <div class="ll-settings-row ll-eng-vec">
-                    <label>벡터 쿼리 범위</label>
+                    <label>Vector query window</label>
                     <input class="ll-settings-input" id="ll_s_vector_scandepth" type="number" min="1" max="50" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">최근 N개 — 좁을수록 "지금 장면" 집중 (채팅 깊이 이하)</span>
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">Latest N messages — narrower windows focus on the "current scene" (cannot exceed scan depth)</span>
                 </div>
 
-                <!-- 주입량 (fast 엔진) -->
+                <!-- Fast engine selection limit -->
                 <div class="ll-settings-row ll-eng-fast">
-                    <label>주입 상한 (maxK)</label>
+                    <label>Selection limit (maxK)</label>
                     <input class="ll-settings-input" id="ll_s_vector_maxk" type="number" min="1" max="50" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">최대 주입 개수 — "다 들어오는" 걸 막는 주 손잡이</span>
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">Maximum selected entries — limits "excessive retrieval" per turn</span>
                 </div>
                 <div class="ll-settings-row ll-eng-fast">
-                    <label>키워드 직격</label>
+                    <label>Direct keyword matching</label>
                     <input class="ll-settings-input" id="ll_s_keyword_match" type="checkbox" style="width:auto;" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">이름·별칭으로 인물 정보와 현재 관계를 먼저 확보하고, 사건 키워드는 검색을 보완</span>
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">Prioritize named characters and current relationships; event keywords supplement retrieval.</span>
                 </div>
                 <div class="ll-settings-row ll-eng-fast">
-                    <label>단어 단독 결과 하한</label>
+                    <label>Lexical-only result floor</label>
                     <input class="ll-settings-input" id="ll_s_vector_ratio" type="number" min="0" max="1" step="0.05" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">단어 1등 점수 대비 비율. 벡터 장애/단어 모드에 적용하며 아래 바닥선과 더 높은 값을 사용. 이름 직접 일치는 별도 처리</span>
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">Ratio of the top lexical score. Used in lexical mode or vector fallback; the higher lexical floor applies. Direct name matches are handled separately.</span>
                 </div>
                 <div class="ll-settings-row ll-eng-fast">
-                    <label>단어매칭 바닥선</label>
+                    <label>BM25 score floor</label>
                     <input class="ll-settings-input" id="ll_s_bm25_floor" type="number" min="0" max="1" step="0.05" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">1등 대비 이 비율 미만은 제외. 무관한 로어가 딸려오면 ↑ (0=끔)</span>
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">Exclude results below this fraction of the top score. Raise to reduce unrelated matches (0 = off).</span>
                 </div>
                 <div class="ll-settings-row ll-eng-vec">
-                    <label>유사도 하한 (threshold)</label>
+                    <label>Similarity threshold</label>
                     <input class="ll-settings-input" id="ll_s_vector_threshold" type="number" min="0" max="1" step="0.05" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">관련도 바닥선. 0=끔. 콘솔 <code>vector N@값</code>으로 조절</span>
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">Minimum relevance. 0 = off. Inspect <code>vector N@threshold</code>in the console to tune.</span>
                 </div>
                 <div class="ll-settings-row ll-eng-hybrid">
-                    <label>RRF 가중치</label>
+                    <label>RRF weights</label>
                     <input class="ll-settings-input" id="ll_s_hybrid_wv" type="number" min="0" max="5" step="0.1" style="max-width:70px;" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">벡터(의미)</span>
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">Vector (meaning)</span>
                     <input class="ll-settings-input" id="ll_s_hybrid_wb" type="number" min="0" max="5" step="0.1" style="max-width:70px;" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">BM25(단어)</span>
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">BM25 (words)</span>
                 </div>
 
-                <!-- AI 엔진 전용 -->
+                <!-- AI engine only -->
                 <div class="ll-settings-row ll-eng-ai">
-                    <label>AI 선택 결과 (top K)</label>
+                    <label>AI selection count (top K)</label>
                     <input class="ll-settings-input" id="ll_s_ai_select_k" type="number" min="1" max="30" />
                 </div>
                 <div class="ll-settings-row ll-eng-ai">
-                    <label>AI 선택 timeout (초)</label>
+                    <label>AI selection timeout (seconds)</label>
                     <input class="ll-settings-input" id="ll_s_timeout_sec" type="number" min="5" max="600" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">기본 120 — 넘으면 폴백</span>
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">Default: 120 — use fallback after timeout</span>
                 </div>
                 <div class="ll-settings-row ll-eng-ai">
                     <label class="checkbox_label" style="flex:1;">
                         <input id="ll_s_bm25_prefilter_enabled" type="checkbox" />
-                        <span>BM25 prefilter <span style="font-size:10px;opacity:0.6;">(권장 ON — vector 의존성 0)</span></span>
+                        <span>BM25 prefilter <span style="font-size:10px;opacity:0.6;">(recommended on; no vector dependency)</span></span>
                     </label>
                 </div>
                 <div class="ll-settings-row">
                     <label>BM25 prefilter Top-K</label>
                     <input class="ll-settings-input" id="ll_s_bm25_prefilter_k" type="number" min="5" max="500" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">BM25 후보 풀 크기</span>
+                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">BM25 candidate pool size</span>
                 </div>
 
-                <!-- 벡터 인덱스 (벡터 엔진) -->
+                <!-- Vector index -->
                 <div class="ll-settings-row ll-eng-vec" style="flex-direction:column;align-items:stretch;gap:6px;">
                     <div style="font-size:11px;opacity:0.7;line-height:1.4;">
-                        <i class="fa-solid fa-bolt" style="color:#60a5fa;"></i> <b>벡터 인덱스.</b>
-                        임베딩 소스는 ST <b>Vector Storage</b> 설정을 따라갑니다. 소스/모델을 바꿨거나 엔트리를 많이 고쳤으면 <b>재색인</b>.
+                        <i class="fa-solid fa-bolt" style="color:#60a5fa;"></i> <b>Vector index.</b>
+                        Embeddings follow ST's <b>Vector Storage</b> settings. After changing the source/model or many entries, use <b>Reindex</b>.
                     </div>
                     <div id="ll_s_vector_source" style="font-size:11px;opacity:0.8;"></div>
                     <button class="menu_button" id="ll_s_reindex_btn" style="width:unset;white-space:nowrap;">
-                        <i class="fa-solid fa-database"></i> 벡터 재색인 (managed 전체)
+                        <i class="fa-solid fa-database"></i> Reindex All Managed Lorebooks
                     </button>
                     <div id="ll_s_reindex_status" style="font-size:11px;opacity:0.7;"></div>
                 </div>
@@ -320,42 +321,42 @@ export const PANEL_HTML = `
                 <div class="ll-settings-row">
                     <label class="checkbox_label" style="flex:1;">
                         <input id="ll_s_cache_enabled" type="checkbox" />
-                        <span>선택 결과 캐싱 (스와이프/리젠 비용 0)</span>
+                        <span>Cache selections for swipes / regeneration</span>
                     </label>
                 </div>
                 <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:4px;opacity:0.6;">
                     <div style="font-size:11px;line-height:1.4;">
                         <i class="fa-solid fa-circle-info" style="color:#fbbf24;"></i>
-                        <b>주입 위치/깊이는 entry별 옵션 + ST 프리셋의 World Info 슬롯을 따름.</b>
-                        LL은 entry를 ST WI에 강제 활성화만 함. 위치는 ST 월드 인포 에디터에서 entry의 position/depth로 수정.
+                        <b>Insertion position/depth follows entry settings and the ST preset's World Info slots.</b>
+                        LL activates entries in World Info. Change entry position/depth in the ST World Info editor.
                     </div>
                 </div>
             </div>
 
             <div class="ll-settings-section-title ll-collapsible collapsed" data-toggle="ll_s_prompts">
-                <i class="fa-solid fa-pen-fancy"></i> 프롬프트 커스터마이즈
+                <i class="fa-solid fa-pen-fancy"></i> Customize Prompts
                 <i class="fa-solid fa-chevron-down ll-collapse-chevron" style="margin-left:auto;"></i>
             </div>
             <div class="ll-settings-group collapsed" id="ll_s_prompts">
                 <div style="display:flex;flex-direction:column;gap:4px;">
-                    <label style="font-size:12px;">세계관 생성 프롬프트</label>
+                    <label style="font-size:12px;">World generation prompt</label>
                     <textarea class="ll-settings-textarea" id="ll_s_world_prompt" rows="3"></textarea>
-                    <button class="ll-settings-reset-btn" data-reset="worldBuildPrompt"><i class="fa-solid fa-rotate-left"></i> 초기화</button>
+                    <button class="ll-settings-reset-btn" data-reset="worldBuildPrompt"><i class="fa-solid fa-rotate-left"></i> Reset</button>
                 </div>
                 <div style="display:flex;flex-direction:column;gap:4px;">
-                    <label style="font-size:12px;">정리 프롬프트</label>
+                    <label style="font-size:12px;">Organization prompt</label>
                     <textarea class="ll-settings-textarea" id="ll_s_organize_prompt" rows="3"></textarea>
-                    <button class="ll-settings-reset-btn" data-reset="organizePrompt"><i class="fa-solid fa-rotate-left"></i> 초기화</button>
+                    <button class="ll-settings-reset-btn" data-reset="organizePrompt"><i class="fa-solid fa-rotate-left"></i> Reset</button>
                 </div>
                 <div style="display:flex;flex-direction:column;gap:4px;">
-                    <label style="font-size:12px;">압축 프롬프트</label>
+                    <label style="font-size:12px;">Compression prompt</label>
                     <textarea class="ll-settings-textarea" id="ll_s_compress_prompt" rows="3"></textarea>
-                    <button class="ll-settings-reset-btn" data-reset="compressPrompt"><i class="fa-solid fa-rotate-left"></i> 초기화</button>
+                    <button class="ll-settings-reset-btn" data-reset="compressPrompt"><i class="fa-solid fa-rotate-left"></i> Reset</button>
                 </div>
                 <div style="display:flex;flex-direction:column;gap:4px;">
-                    <label style="font-size:12px;">Summary 백필 프롬프트</label>
+                    <label style="font-size:12px;">Summary backfill prompt</label>
                     <textarea class="ll-settings-textarea" id="ll_s_summary_backfill_prompt" rows="3"></textarea>
-                    <button class="ll-settings-reset-btn" data-reset="summaryBackfillPrompt"><i class="fa-solid fa-rotate-left"></i> 초기화</button>
+                    <button class="ll-settings-reset-btn" data-reset="summaryBackfillPrompt"><i class="fa-solid fa-rotate-left"></i> Reset</button>
                 </div>
             </div>
         </div>
@@ -363,26 +364,22 @@ export const PANEL_HTML = `
         <!-- Status Bar -->
         <div class="ll-status-bar">
             <div class="ll-status-item" id="ll_stat_entries_box">
-                <i class="fa-solid fa-book"></i>
-                <span class="ll-status-value" id="ll_stat_entries">0</span>개
+                <span class="ll-status-value" id="ll_stat_entries">0</span><span class="ll-status-label">entries</span>
             </div>
-            <div class="ll-status-item ll-stat-storage" id="ll_stat_storage_box" title="저장 토큰 (selection 로어북의 활성 엔트리 합) — 클릭하면 로어북별 breakdown">
-                <i class="fa-solid fa-database"></i>
-                <span style="font-size:10px;opacity:0.7;">저장</span>
+            <div class="ll-status-item ll-stat-storage" id="ll_stat_storage_box" title="Stored tokens across active source entries — click for a per-book breakdown">
+                <span class="ll-status-label">Stored</span>
                 <span class="ll-status-value" id="ll_stat_storage">0</span>
             </div>
-            <div class="ll-status-item ll-stat-inject" id="ll_stat_inject_box" title="선택한 기억 토큰 — 클릭하면 선택 이유와 WI 활성 결과">
-                <i class="fa-solid fa-arrow-down-to-bracket"></i>
-                <span style="font-size:10px;opacity:0.7;">선택</span>
+            <div class="ll-status-item ll-stat-inject" id="ll_stat_inject_box" title="Selected memory tokens — click for selection reasons and WI activation results">
+                <span class="ll-status-label">Selected</span>
                 <span class="ll-status-value" id="ll_stat_inject">—</span>
-                <span class="ll-stat-ratio" id="ll_stat_ratio" style="font-size:10px;opacity:0.6;"></span>
+                <span class="ll-stat-ratio" id="ll_stat_ratio"></span>
             </div>
             <div class="ll-status-item">
-                <i class="fa-solid fa-clock"></i>
-                미처리 <span class="ll-status-value" id="ll_stat_unprocessed">0</span>
+                <span class="ll-status-label">Unprocessed</span> <span class="ll-status-value" id="ll_stat_unprocessed">0</span>
             </div>
             <div class="ll-status-spacer"></div>
-            <button class="ll-status-btn ll-btn-refresh" title="새로고침">
+            <button class="ll-status-btn ll-btn-refresh" title="Refresh">
                 <i class="fa-solid fa-rotate"></i>
             </button>
         </div>

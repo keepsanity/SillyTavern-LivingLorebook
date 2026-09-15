@@ -1,3 +1,4 @@
+import { l, lt } from './i18n.js';
 import { operationContext, isOperationCurrent } from './lore-store.js';
 /**
  * World Builder — 짧은 설명에서 상세 세계관 로어북 엔트리 생성
@@ -20,7 +21,7 @@ export async function generateWorld(description) {
     const operation = operationContext();
 
     if (!settings.targetLorebook) {
-        throw new Error('대상 로어북을 먼저 선택해주세요.');
+        throw new Error(l('ll.1c7e28934a4ba644', "Select a target lorebook first."));
     }
 
     const systemPrompt = `You are a world-building assistant for mature/adult roleplay. You MUST preserve ALL details from the source material exactly as written — including physical descriptions, body characteristics, scars, injuries, nudity, violence, trauma, and any adult or sensitive content. Do NOT censor, sanitize, skip, or tone down any information. This is a creative fiction lorebook for private use. Output ONLY valid JSON. No markdown fences, no explanations.`;
@@ -40,19 +41,19 @@ export async function generateWorld(description) {
         entries = salvageTruncatedArray(response);
         if (!entries) {
             console.error(`${LOG_PREFIX} Failed to parse world-build response:`, response);
-            throw new Error('AI 응답을 파싱할 수 없습니다. 다시 시도해주세요.');
+            throw new Error(l('ll.d2260715ff17de2d', "Could not parse the AI response. Try again."));
         }
         console.warn(`${LOG_PREFIX} Response was truncated — salvaged ${entries.length} entries`);
     }
 
     if (!Array.isArray(entries) || entries.length === 0) {
-        throw new Error('생성된 엔트리가 없습니다.');
+        throw new Error(l('ll.23782c0e61b79b53', "No entries were generated."));
     }
 
     // Load lorebook and create entries
     const data = await loadAnyLorebook(settings.targetLorebook);
     if (!data) {
-        throw new Error('로어북을 로드할 수 없습니다.');
+        throw new Error(l('ll.fb9199f839943224', "Could not load the lorebook."));
     }
 
     const created = [];
@@ -76,7 +77,7 @@ export async function generateWorld(description) {
     }
 
     // Save lorebook
-    if (!isOperationCurrent(operation)) throw new Error('채팅이 변경되어 저장을 중단했습니다.');
+    if (!isOperationCurrent(operation)) throw new Error(l('ll.515f3432faf2e879', "The chat changed. Saving was cancelled."));
     await saveLorebook(settings.targetLorebook, data);
     refreshEditor();
 
@@ -108,17 +109,17 @@ export async function createManualEntry({ title, content, category }) {
     const operation = operationContext();
 
     if (!settings.targetLorebook) {
-        throw new Error('대상(target) 로어북을 먼저 선택해주세요.');
+        throw new Error(l('ll.10d2826c03caa797', "Select a target lorebook first."));
     }
 
     const cleanTitle = (title || '').trim();
     if (!cleanTitle) {
-        throw new Error('제목을 입력해주세요.');
+        throw new Error(l('ll.c5348ab5543850dd', "Enter a title."));
     }
 
     const data = await loadAnyLorebook(settings.targetLorebook);
     if (!data) {
-        throw new Error('로어북을 로드할 수 없습니다.');
+        throw new Error(l('ll.fb9199f839943224', "Could not load the lorebook."));
     }
 
     const entry = await createEntry(settings.targetLorebook, data, {
@@ -128,10 +129,10 @@ export async function createManualEntry({ title, content, category }) {
         category: category || 'fact',
     });
     if (!entry) {
-        throw new Error('엔트리 생성에 실패했습니다.');
+        throw new Error(l('ll.a5f8da63ba2ccd44', "Entry creation failed."));
     }
 
-    if (!isOperationCurrent(operation)) throw new Error('채팅이 변경되어 저장을 중단했습니다.');
+    if (!isOperationCurrent(operation)) throw new Error(l('ll.515f3432faf2e879', "The chat changed. Saving was cancelled."));
 
     await saveLorebook(settings.targetLorebook, data);
     refreshEditor();
@@ -164,7 +165,7 @@ export async function suggestWorldEntries(characterContext, userRequirements = '
     const operation = operationContext();
 
     if (!settings.targetLorebook) {
-        throw new Error('대상 로어북을 먼저 선택해주세요.');
+        throw new Error(l('ll.1c7e28934a4ba644', "Select a target lorebook first."));
     }
 
     // 기존 로어북 엔트리 수집
@@ -217,12 +218,12 @@ Output ONLY the JSON array.`;
         suggestions = salvageTruncatedArray(response);
         if (!suggestions) {
             console.error(`${LOG_PREFIX} Failed to parse suggestions response:`, response);
-            throw new Error('AI 응답을 파싱할 수 없습니다.');
+            throw new Error(l('ll.23b16480449b3d31', "Could not parse the AI response."));
         }
     }
 
     if (!Array.isArray(suggestions)) {
-        throw new Error('제안 형식이 잘못되었습니다.');
+        throw new Error(l('ll.b889ac843191b6f9', "Invalid suggestion format."));
     }
 
     return suggestions;
@@ -240,14 +241,14 @@ export async function generateFromSuggestions(selectedItems, characterContext, u
     const operation = operationContext();
 
     if (!settings.targetLorebook) {
-        throw new Error('대상 로어북을 먼저 선택해주세요.');
+        throw new Error(l('ll.1c7e28934a4ba644', "Select a target lorebook first."));
     }
     if (!Array.isArray(selectedItems) || selectedItems.length === 0) {
-        throw new Error('선택된 항목이 없습니다.');
+        throw new Error(l('ll.8b025aefd221810a', "No items selected."));
     }
 
     const data = await loadAnyLorebook(settings.targetLorebook);
-    if (!data) throw new Error('로어북을 로드할 수 없습니다.');
+    if (!data) throw new Error(l('ll.fb9199f839943224', "Could not load the lorebook."));
 
     const systemPrompt = `You are a world-building assistant for mature/adult roleplay. Expand the provided entry outlines into focused lorebook entries. Preserve mature/adult/violent content. Do NOT censor. Output ONLY valid JSON. No markdown fences, no explanations.`;
 
@@ -289,12 +290,12 @@ Output a JSON array of the expanded entries. Output ONLY the JSON array.`;
         entries = salvageTruncatedArray(response);
         if (!entries) {
             console.error(`${LOG_PREFIX} Failed to parse generation response:`, response);
-            throw new Error('AI 응답을 파싱할 수 없습니다.');
+            throw new Error(l('ll.23b16480449b3d31', "Could not parse the AI response."));
         }
     }
 
     if (!Array.isArray(entries) || entries.length === 0) {
-        throw new Error('생성된 엔트리가 없습니다.');
+        throw new Error(l('ll.23782c0e61b79b53', "No entries were generated."));
     }
 
     // 엔트리 생성
@@ -317,7 +318,7 @@ Output a JSON array of the expanded entries. Output ONLY the JSON array.`;
         }
     }
 
-    if (!isOperationCurrent(operation)) throw new Error('채팅이 변경되어 저장을 중단했습니다.');
+    if (!isOperationCurrent(operation)) throw new Error(l('ll.515f3432faf2e879', "The chat changed. Saving was cancelled."));
 
     await saveLorebook(settings.targetLorebook, data);
     refreshEditor();
@@ -364,12 +365,12 @@ export async function reorganizeExisting(opts = {}) {
     const operation = operationContext();
 
     if (!settings.targetLorebook) {
-        throw new Error('대상 로어북을 먼저 선택해주세요.');
+        throw new Error(l('ll.1c7e28934a4ba644', "Select a target lorebook first."));
     }
 
     const data = await loadAnyLorebook(settings.targetLorebook);
     if (!data?.entries) {
-        throw new Error('로어북을 로드할 수 없습니다.');
+        throw new Error(l('ll.fb9199f839943224', "Could not load the lorebook."));
     }
 
     // 기존 엔트리 수집 (uid 추적)
@@ -386,7 +387,7 @@ export async function reorganizeExisting(opts = {}) {
     }
 
     if (existing.length === 0) {
-        throw new Error('분석할 엔트리가 없습니다.');
+        throw new Error(l('ll.14e067b673248196', "No entries to analyze."));
     }
 
     // 관련된 것끼리 같은 배치에 들어가야 병합/중복제거가 의미 있다.
@@ -446,8 +447,8 @@ Output a JSON array. Each entry must have "source_uids" (array of input UIDs cov
 Output ONLY the JSON array.`;
 
     console.log(`${LOG_PREFIX} Reorganizing ${existing.length} entries in ${batches.length} batches `
-        + `(최대 ${batchSize}개 / ${charCap.toLocaleString()}자): `
-        + batches.map(b => `${b.length}개·${b.reduce((n, e) => n + e.content.length, 0).toLocaleString()}자`).join(' | '));
+        + lt('ll.3259827e93ad5dec')`(up to ${batchSize}entries / ${charCap.toLocaleString()}characters): `
+        + batches.map(b => lt('ll.5ae99b6ae1924523')`${b.length}entries ·${b.reduce((n, e) => n + e.content.length, 0).toLocaleString()}characters`).join(' | '));
 
     // --- 1) 전 배치 실행. 하나라도 실패하면 로어북은 손도 대지 않고 중단 ---
     const newEntries = [];
@@ -459,21 +460,21 @@ Output ONLY the JSON array.`;
 
         let parsed;
         try { parsed = JSON.parse(response.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()); }
-        catch { throw new Error('재구성 응답이 불완전합니다. 원본을 유지하고 중단했습니다.'); }
+        catch { throw new Error(l('ll.d33ca82eb59e24bf', "The reorganization response is incomplete. Originals were preserved.")); }
         const inputUids = new Set(batches[i].map(e => String(e.uid)));
         const covered = new Set();
-        if (!Array.isArray(parsed) || !parsed.length) throw new Error('재구성 결과가 비어 있습니다.');
+        if (!Array.isArray(parsed) || !parsed.length) throw new Error(l('ll.b184cf2a3a34e885', "The reorganization result is empty."));
         for (const item of parsed) {
             if (typeof item.content !== 'string' || !item.content.trim() || typeof item.title !== 'string'
-                || !Array.isArray(item.source_uids) || !item.source_uids.length) throw new Error('재구성 본문 또는 출처 UID가 없습니다.');
+                || !Array.isArray(item.source_uids) || !item.source_uids.length) throw new Error(l('ll.aa0d3328afd5c026', "A reorganized entry is missing content or source UIDs."));
             for (const uid of item.source_uids) {
-                if (!inputUids.has(String(uid))) throw new Error('재구성 출처가 입력 범위를 벗어났습니다.');
+                if (!inputUids.has(String(uid))) throw new Error(l('ll.168449e442dff70c', "A reorganization source is outside the input range."));
                 covered.add(String(uid));
             }
         }
-        if (covered.size !== inputUids.size) throw new Error('재구성 결과에서 빠진 원본이 있어 중단했습니다.');
+        if (covered.size !== inputUids.size) throw new Error(l('ll.cc9194439fe2166a', "Some original entries are missing from the result. Reorganization stopped."));
         newEntries.push(...parsed);
-        console.log(`${LOG_PREFIX} 배치 ${i + 1}/${batches.length}: ${batches[i].length}개 → ${parsed.length}개`);
+        console.log(lt('ll.c1f2a62b764c362a')`${LOG_PREFIX} batch ${i + 1}/${batches.length}: ${batches[i].length}entries → ${parsed.length}entries`);
     }
     opts.onProgress?.(batches.length, batches.length);
 
@@ -483,13 +484,13 @@ Output ONLY the JSON array.`;
     const afterChars = newEntries.reduce((n, e) => n + String(e?.content || '').length, 0);
     const keepRatio = beforeChars > 0 ? afterChars / beforeChars : 1;
     if (keepRatio < 0.7) {
-        const msg = `재구성 결과가 원본의 ${Math.round(keepRatio * 100)}%로 줄었습니다 `
-            + `(${beforeChars.toLocaleString()}자 → ${afterChars.toLocaleString()}자). 내용이 유실된 것으로 보입니다.`;
+        const msg = lt('ll.7c3733a5457c44c1')`Reorganized content shrank to ${Math.round(keepRatio * 100)}% of the original `
+            + lt('ll.48c5cd264cca2042')`(${beforeChars.toLocaleString()}characters → ${afterChars.toLocaleString()}characters). Content may have been lost.`;
         if (handling === 'delete') {
-            throw new Error(`${msg}\n\n원본을 지우지 않고 중단했습니다. 설정에서 "하이드"로 바꾸고 다시 시도하거나, 배치 크기를 줄여보세요.`);
+            throw new Error(lt('ll.c81306ffe7fe883e')`${msg}\n\nStopped without deleting originals. In settings, switch to "Hide"and retry, or use a smaller batch size.`);
         }
-        console.warn(`${LOG_PREFIX} ${msg} (하이드 모드라 원본은 복구 가능)`);
-        globalThis.toastr?.warning?.(`${msg} 기존 엔트리는 하이드 상태로 남아 있으니 확인해주세요.`, 'LivingLorebook', { timeOut: 15000 });
+        console.warn(lt('ll.33e5d64e6e20b2dc')`${LOG_PREFIX} ${msg} (hide mode preserves recoverable originals)`);
+        globalThis.toastr?.warning?.(lt('ll.87e5b92b4264bdbd')`${msg} Check the original entries, which remain hidden.`, 'LivingLorebook', { timeOut: 15000 });
     }
 
     // --- 3) 여기서부터 로어북 변경 ---
@@ -522,7 +523,7 @@ Output ONLY the JSON array.`;
         }
     }
 
-    if (!isOperationCurrent(operation)) throw new Error('채팅이 변경되어 저장을 중단했습니다.');
+    if (!isOperationCurrent(operation)) throw new Error(l('ll.515f3432faf2e879', "The chat changed. Saving was cancelled."));
 
     await saveLorebook(settings.targetLorebook, data);
     refreshEditor();
@@ -535,7 +536,7 @@ Output ONLY the JSON array.`;
         console.warn(`${LOG_PREFIX} Vector insertion failed (non-critical):`, err);
     }
 
-    console.log(`${LOG_PREFIX} Reorganized into ${created.length} entries (${batches.length} batches, ${Math.round(keepRatio * 100)}% 분량 유지)`);
+    console.log(lt('ll.8d8be138661f2dc5')`${LOG_PREFIX} Reorganized into ${created.length} entries (${batches.length} batches, ${Math.round(keepRatio * 100)}% of original length retained)`);
 
     // 자동 체인: reorganize 후 기존 arc 있으면 자동 업데이트
     let arcUpdated = false;

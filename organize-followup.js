@@ -1,3 +1,4 @@
+import { lt } from './i18n.js';
 /** Complete the continuity brief before allowing source messages to be hidden. */
 export async function finishOrganize(result, settings, { isCurrent, backfill, arc }) {
     const chain = { backfilled: 0, arcUpdated: false, arcCreated: false, errors: [], allowHide: true };
@@ -10,7 +11,7 @@ export async function finishOrganize(result, settings, { isCurrent, backfill, ar
             chain.arcCreated = !!outcome.created;
             chain.arcUpdated = !!outcome.updated;
         } catch (err) {
-            chain.errors.push(`줄거리: ${err.message}`);
+            chain.errors.push(lt('ll.7a7aa4e03311b1fc')`Story arc: ${err.message}`);
             chain.allowHide = false;
         }
     }

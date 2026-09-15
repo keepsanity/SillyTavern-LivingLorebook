@@ -3,6 +3,12 @@
 Remember shared experiences in detail, keep relationships current, and preserve the overall story.
 Made mostly for personal use ₍ᐢっ ̫ ʚ̴̶̷̥̀ ᐢ₎
 
+## Interface language
+
+The interface follows SillyTavern's language setting. Korean (`ko` / `ko-kr`) uses the bundled Korean locale; English is the fallback for other languages. Reload SillyTavern after changing the language. No separate extension language setting is needed.
+
+Buttons, settings, dialogs, review messages, selection reasons, and notifications are localized. Lorebook content, names, and saved model prompts are not translated or rewritten. Localization uses SillyTavern's native locale loader and translation API, with namespaced keys in `locales/ko.json`. Template placeholders must be preserved when adding translations.
+
 ## Organizing memories
 
 The main toolbar contains **Organize Memories**, **New Entry**, and **Story Arc**. Open **More** for undo, world generation, reorganization, and memory compression. Review, automatic story arcs, and message hiding are grouped under memory organization settings. Compression settings contain ratios; the action lives in More.
@@ -65,7 +71,7 @@ Run from the extension directory:
 node --experimental-vm-modules --test tests/*.test.mjs
 ```
 
-The 37 regression tests execute real extension modules with mock SillyTavern storage, model, and vector services. They cover relationship transitions, save failures, older ranges, incomplete proposals, duplicate warnings, name retrieval, token budgets, reorganization, and first-arc generation. These are not a benchmark of actual RP response quality.
+The 41 regression tests execute real extension modules with mock SillyTavern storage, model, vector, and localization services. They cover relationship transitions, save failures, older ranges, incomplete proposals, duplicate warnings, name retrieval, token budgets, reorganization, first-arc generation, and language fallback without modifying user text. These are not a benchmark of actual RP response quality.
 
 Older entries without v3 evidence positions cannot be checked for chronological regression before their first tracked update. Semantic duplicates and source entailment still require review. The pre-save comparison is not server-side atomic compare-and-swap: another tab can write between comparison and saving. Lorebook and settings persistence are also not a single database transaction.
 

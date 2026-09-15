@@ -1,3 +1,4 @@
+import { lt } from './i18n.js';
 /**
  * Vector Service — ST 내장 벡터 API를 통한 임베딩/검색
  * 사용자가 설정한 벡터 소스를 그대로 사용
@@ -110,7 +111,7 @@ export function getVectorSourceSignature() {
 function assertSourceUsable() {
     const { source } = getVectorSourceInfo();
     if (CLIENT_EMBEDDING_SOURCES.has(source)) {
-        throw new Error(`벡터 소스 '${source}'는 브라우저에서 임베딩을 만들어야 해서 LL이 지원하지 않습니다. ST 벡터 설정에서 다른 소스를 골라주세요.`);
+        throw new Error(lt('ll.90f7ebc0f5649bee')`Vector source '${source}' requires browser-side embeddings and is not supported by LL. Choose another source in ST Vector Storage settings.`);
     }
 }
 
@@ -173,7 +174,7 @@ async function describeFailure(response, what) {
         detail = (await response.text()).slice(0, 300);
     } catch { /* 본문 없음 */ }
     const { source, model } = getVectorSourceInfo();
-    return new Error(`${what} 실패 (${response.status} ${response.statusText}) [${source}${model ? '/' + model : ''}]${detail ? ' — ' + detail : ''}`);
+    return new Error(lt('ll.1846e4999f076700')`${what} failed (${response.status} ${response.statusText}) [${source}${model ? '/' + model : ''}]${detail ? ' — ' + detail : ''}`);
 }
 
 /**
@@ -202,7 +203,7 @@ export async function insertEntries(collectionId, entries) {
     });
 
     if (!response.ok) {
-        throw await describeFailure(response, `벡터 삽입 (${collectionId})`);
+        throw await describeFailure(response, lt('ll.bebf30d87f6392d0')`Vector insert (${collectionId})`);
     }
 
     console.log(`${LOG_PREFIX} Inserted ${items.length} vectors into ${collectionId}`);
@@ -235,7 +236,7 @@ export async function queryMultipleCollections(collectionIds, searchText, topK =
     });
 
     if (!response.ok) {
-        throw await describeFailure(response, `벡터 검색 (${collectionIds.length}개 컬렉션)`);
+        throw await describeFailure(response, lt('ll.f5a10359083195f5')`Vector query (${collectionIds.length}collections)`);
     }
 
     return await response.json();
@@ -259,7 +260,7 @@ export async function deleteEntries(collectionId, hashes) {
     });
 
     if (!response.ok) {
-        throw await describeFailure(response, `벡터 삭제 (${collectionId})`);
+        throw await describeFailure(response, lt('ll.abcb826b5b954bd4')`Vector delete (${collectionId})`);
     }
 }
 
@@ -278,7 +279,7 @@ async function purgeCollection(collectionId) {
     });
 
     if (!response.ok) {
-        throw await describeFailure(response, `컬렉션 삭제 (${collectionId})`);
+        throw await describeFailure(response, lt('ll.0d2bd908b28c36c1')`Collection delete (${collectionId})`);
     }
 }
 

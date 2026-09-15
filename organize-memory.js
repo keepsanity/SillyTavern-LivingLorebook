@@ -1,3 +1,4 @@
+import { l } from './i18n.js';
 import { getSettings, loadAnyLorebook, getMetadata, stageMetadata, createEntry, updateEntryContent,
     saveLorebook, operationContext, isOperationCurrent, saveSettings } from './lore-store.js';
 import { callLLM } from './llm-service.js';
@@ -9,13 +10,13 @@ const messageSignature = m => JSON.stringify([m?.is_user, m?.name, m?.mes]);
 
 export async function organizeMemories(chat, characterContext = '', options = {}) {
     const op = operationContext();
-    if (!op.book) throw new Error('대상 로어북을 먼저 선택해주세요.');
-    if (running.has(op.book)) throw new Error('이 로어북의 기억 정리가 진행 중입니다.');
+    if (!op.book) throw new Error(l('ll.1c7e28934a4ba644', "Select a target lorebook first."));
+    if (running.has(op.book)) throw new Error(l('ll.b7a99b0fd2236d64', "Memory organization is already running for this lorebook."));
     running.add(op.book);
     try {
         const settings = structuredClone(getSettings());
         const data = await loadAnyLorebook(op.book);
-        if (!data) throw new Error('로어북을 불러올 수 없습니다.');
+        if (!data) throw new Error(l('ll.06f205d172716625', "Could not load the lorebook."));
         const start = Math.max(0, options.rangeStart ?? 0);
         const end = Math.min(chat.length - 1, options.rangeEnd ?? chat.length - 1);
         const indices = [];
@@ -53,27 +54,27 @@ export async function organizeMemories(chat, characterContext = '', options = {}
             if (change.type !== 'update') continue;
             const previous = metadata[String(change.uid)].lastEvidence;
             if (previous && previous.chatId !== op.chatId) {
-                throw new Error('다른 채팅에서 갱신한 LIVE 기억입니다. 분기별 로어북을 사용하거나 수동 검토해주세요.');
+                throw new Error(l('ll.7f7ef01274c0e0de', "This LIVE memory was updated in another chat. Use separate lorebooks for branches or review it manually."));
             }
             if (previous && Math.max(...change.sourceMessages) < previous.index) {
-                throw new Error('과거 메시지로 최신 LIVE 상태를 되돌릴 수 없습니다. 사건 추가 또는 수동 편집을 사용해주세요.');
+                throw new Error(l('ll.6b4058edeadcbede', "Older messages cannot rewind the latest LIVE state. Add a historical event or edit manually."));
             }
             if (previous?.signature && messageSignature(chat[previous.index]) !== previous.signature) {
-                throw new Error('이 LIVE 기억의 기존 근거 대화가 수정됐습니다. 관계 상태를 수동 확인해주세요.');
+                throw new Error(l('ll.28230dd0160b0468', "The previous source conversation for this LIVE memory was edited. Review its state manually."));
             }
         }
         const assertCurrent = () => {
-            if (!isOperationCurrent(op)) throw new Error('채팅 또는 대상 로어북이 바뀌어 적용을 중단했습니다.');
-            if (indices.some(i => messageSignature(chat[i]) !== signatures[i])) throw new Error('분석 중 대화가 수정돼 적용을 중단했습니다.');
+            if (!isOperationCurrent(op)) throw new Error(l('ll.05359fcc3600ab28', "The chat or target lorebook changed. Applying changes was cancelled."));
+            if (indices.some(i => messageSignature(chat[i]) !== signatures[i])) throw new Error(l('ll.923264e0c75da77a', "The conversation changed during analysis. Applying changes was cancelled."));
             for (const change of proposal.changes.filter(c => c.type === 'update')) {
                 if (JSON.stringify(getMetadata(change.uid, op.book) || {}) !== JSON.stringify(metadata[change.uid])) {
-                    throw new Error('분석 중 LIVE 설정이나 기억 메타데이터가 변경됐습니다. 다시 정리해주세요.');
+                    throw new Error(l('ll.1f9c24cea7ee95c6', "LIVE settings or memory metadata changed during analysis. Organize again."));
                 }
             }
         };
         assertCurrent();
         if (settings.reviewMemories !== false) {
-            if (typeof options.review !== 'function') throw new Error('변경 검토 화면을 통해 기억 정리를 실행해주세요.');
+            if (typeof options.review !== 'function') throw new Error(l('ll.2fc378cb2604eeec', "Run memory organization through the review interface."));
             const sources = Object.fromEntries(indices.map(i => [i, chat[i].mes]));
             const accepted = await options.review({ ...proposal, data, metadata, operation: op, indices, sources });
             if (!accepted) return { cancelled: true, added: 0, updated: 0, deactivated: 0, processedIndices: [], operation: op };
@@ -88,7 +89,7 @@ export async function organizeMemories(chat, characterContext = '', options = {}
             let beforeMeta = null;
             if (change.type === 'add') {
                 const entry = await createEntry(op.book, data, change);
-                if (!entry) throw new Error('엔트리 생성 실패');
+                if (!entry) throw new Error(l('ll.fc1065f3fa7265d7', "Entry creation failed."));
                 uid = String(entry.uid);
                 added++;
             } else {
