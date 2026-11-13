@@ -11,6 +11,35 @@ import { generateStoryArc } from './memory-manager.js';
 
 const LOG_PREFIX = '[LivingLorebook]';
 
+const REORGANIZE_TITLE_RULES = `TITLE CONTRACT (identical for every batch):
+- Use concise, descriptive titles. Never add category labels or generated sequence numbers such as "Event 1"; batch position is not story chronology.
+- For category "event", also return "event_time" and "event_subject" as single-line strings. The application builds the title as event_time + " — " + event_subject.
+- event_time: the RP date/day and time explicitly supported by the source. Use English short month names and month-first dates ("Oct 20", "Oct 20, 2025"), or "Day 3 afternoon" for relative story days. Preserve explicit years, times, uncertainty, and ranges. Never guess missing dates or resolve ambiguous numeric dates. If unavailable, return "" (the title will be the subject alone).
+- event_subject: a short description of what happened, without the date, parentheses around the date, category prefix, or generated event number. Keep names and distinguishing details.
+- Example: {"category":"event","title":"Oct 20 — Sabrina returns the key","event_time":"Oct 20","event_subject":"Sabrina returns the key"}.
+- For other categories, title names the specific entity, relationship, or fact; do not impose event dating or numbering.
+- These title rules also apply when preserving an entry's content unchanged. Existing inconsistent title styles are not templates.`;
+
+/** Compose event titles ourselves so separate model calls cannot choose different layouts. */
+export function reorganizedTitle(item) {
+    if (item.category !== 'event') return item.title.trim();
+    if (typeof item.event_time !== 'string' || typeof item.event_subject !== 'string'
+        || /[\r\n]/.test(item.event_time + item.event_subject) || !item.event_subject.trim()) {
+        throw new Error(l('ll.reorganize.eventTitle', 'An event is missing valid title fields. Reorganization stopped; originals were preserved.'));
+    }
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const fullMonths = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    let time = item.event_time.trim().replace(/\s+/g, ' ');
+    // Normalize spelling, not chronology: do not parse/infer dates with Date().
+    time = time.replace(/\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b\.?/gi,
+        month => months[fullMonths.findIndex(full => full.toLowerCase().startsWith(month.replace(/\.$/, '').toLowerCase()))]);
+    time = time.replace(/\b(\d{1,2})(?:st|nd|rd|th)? (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/g, '$2 $1');
+    time = time.replace(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) 0?(\d{1,2})(?:st|nd|rd|th)?\b/g, '$1 $2');
+    const subject = item.event_subject.trim().replace(/^event\s*#?\d+\s*[:.\-–—]\s*/i, '').trim();
+    if (!subject) throw new Error(l('ll.reorganize.eventTitle', 'An event is missing valid title fields. Reorganization stopped; originals were preserved.'));
+    return time ? `${time} — ${subject}` : subject;
+}
+
 /**
  * 세계관 생성
  * @param {string} description - 유저의 짧은 설명
@@ -436,8 +465,9 @@ CRITICAL RULES:
 - Split entries that cover multiple topics into separate entries.
 - Merge two entries ONLY if they describe the exact same thing; when you merge, the merged entry must contain everything both originals said.
 - Each entry covers ONE specific thing (one trait, one location, one event, etc.)
-- For "event" category: title MUST include RP date/time/day if available (e.g., "Day 3 afternoon - first outing")
 - Include memorable quotes, dialogue, text messages, letters verbatim when present in original entries.
+
+${REORGANIZE_TITLE_RULES}
 
 Current entries:
 ${batch.map(e => `[uid:${e.uid}] [${e.title}] ${e.content}`).join('\n\n')}
@@ -471,6 +501,7 @@ Output ONLY the JSON array.`;
                 if (!inputUids.has(String(uid))) throw new Error(l('ll.168449e442dff70c', "A reorganization source is outside the input range."));
                 covered.add(String(uid));
             }
+            item.title = reorganizedTitle(item);
         }
         if (covered.size !== inputUids.size) throw new Error(l('ll.cc9194439fe2166a', "Some original entries are missing from the result. Reorganization stopped."));
         newEntries.push(...parsed);

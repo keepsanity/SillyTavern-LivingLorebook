@@ -1,4 +1,5 @@
 import { l, lt } from './i18n.js';
+import { bindJevSettings } from './jev-ui.js';
 /**
  * UI — 설정 뷰 (패널의 톱니 아이콘). 입력 바인딩 + 로어북 선택 소스 관리 + 벡터 인덱스 상태.
  *
@@ -72,6 +73,33 @@ async function handleBackfillSummaries(btn, statusEl) {
 
 export function bindSettingsInputs(panel) {
     const settings = getSettings();
+    const organizePrompt = panel.querySelector('#ll_s_organize_prompt');
+    if (organizePrompt && !panel.querySelector('#ll_s_organize_max_tokens')) {
+        const row = document.createElement('div');
+        row.className = 'll-settings-row';
+        const label = document.createElement('label');
+        label.htmlFor = 'll_s_organize_max_tokens';
+        label.textContent = l('ll.organize.outputBudget', 'Memory organization output token limit');
+        const input = document.createElement('input');
+        input.id = 'll_s_organize_max_tokens';
+        input.className = 'll-settings-input';
+        input.type = 'number';
+        input.min = '1';
+        input.step = '1';
+        input.value = settings.organizeMaxTokens;
+        input.addEventListener('change', () => {
+            const value = Number(input.value);
+            if (!Number.isSafeInteger(value) || value < 1) {
+                input.value = settings.organizeMaxTokens;
+                return;
+            }
+            settings.organizeMaxTokens = value;
+            saveSettings();
+        });
+        row.append(label, input);
+        organizePrompt.before(row);
+    }
+    bindJevSettings(panel, settings, saveSettings, clearSelectionCache);
     const bind = (id, key, transform = Number) => {
         const el = panel.querySelector(id);
         if (!el) return;
@@ -110,7 +138,9 @@ export function bindSettingsInputs(panel) {
     const ENGINE_SHORT = { hybrid: l('ll.b0c87e8d4b9aa3c9', "Hybrid"), bm25: l('ll.a729418ad584ef42', "Lexical"), ai: l('ll.a3a80c64f2ed24af', "AI") };
     function updateEngineVisibility(engine) {
         const show = {
-            '.ll-eng-fast':   engine !== 'ai',        // maxK / 컷오프
+            '.ll-eng-fast':   engine === 'hybrid' || engine === 'bm25',
+            '.ll-eng-jev':    engine === 'jev',
+            '.ll-eng-bm25-pool': engine !== 'jev',
             '.ll-eng-vec':    engine === 'hybrid',    // 벡터 범위/하한/재색인 (하이브리드만)
             '.ll-eng-hybrid': engine === 'hybrid',    // RRF 가중치
             '.ll-eng-ai':     engine === 'ai',        // AI K / timeout / prefilter 토글
@@ -208,6 +238,7 @@ export function bindSettingsInputs(panel) {
         hybrid: l('ll.cb65ebd7fcabc593', "Hybrid (words + meaning)"),
         bm25: l('ll.ffe49df2c8bef5b5', "Lexical (no embeddings)"),
         ai: l('ll.c7fdb9c328432389', "AI selection"),
+        jev: l('ll.jev.option', 'Jev selection'),
     };
     /** 이 엔진이 벡터 인덱스를 필요로 하는가 */
     const needsVector = (engine) => engine === 'hybrid' || engine === 'vector';
@@ -474,6 +505,15 @@ export function bindSettingsInputs(panel) {
                 performReindex({ silent: true });
             }
             refreshVectorSourceStatus();   // ST 이중주입 경고가 이 토글에 달려 있음
+        });
+    }
+
+    const llOnlyEl = panel.querySelector('#ll_s_ll_only');
+    if (llOnlyEl) {
+        llOnlyEl.checked = settings.llOnly !== false;
+        llOnlyEl.addEventListener('change', () => {
+            settings.llOnly = llOnlyEl.checked;
+            saveSettings();
         });
     }
 

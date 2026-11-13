@@ -48,6 +48,7 @@ export function getCharacterContext() {
 // 카테고리 설정 (아이콘 / 한글 라벨 / 이모지)
 export const CATEGORIES = {
     arc:           { icon: 'fa-solid fa-book-bookmark',  label: l('ll.687bf8f66ea0f585', "Story Arc"),   iconChar: '📖' },
+    direction:     { icon: 'fa-solid fa-clapperboard',   label: l('ll.director.category', "Director's Note"), iconChar: '🎬' },
     character:     { icon: 'fa-solid fa-user',           label: l('ll.280f69c4a593505d', "Characters"),   iconChar: '🧑' },
     relationship:  { icon: 'fa-solid fa-heart',          label: l('ll.18ab6599abaaab1b', "Relationships"),     iconChar: '💕' },
     location:      { icon: 'fa-solid fa-location-dot',   label: l('ll.61eaecc09cb7e53d', "Locations"),     iconChar: '📍' },
@@ -73,6 +74,13 @@ export function escapeAttr(str) {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
 }
+
+// ── 타임라인이 보여주는 로어북 ──────────────────────────────
+// 기본은 대상(메인) 로어북. 사이드(selection) 로어북 칩을 누르면 바뀐다. 빈 값 = 메인.
+let _viewLorebook = '';
+export function getViewLorebook() { return _viewLorebook || getSettings().targetLorebook || ''; }
+export function setViewLorebook(name) { _viewLorebook = name === getSettings().targetLorebook ? '' : (name || ''); }
+export function isViewingSideLorebook() { return !!_viewLorebook && _viewLorebook !== getSettings().targetLorebook; }
 
 // ── refreshPanel 레지스트리 ──────────────────────────────────
 // 패널은 아직 index.js가 소유. UI 모듈(모달 등)이 순환 import 없이 패널을 새로고침할 수 있게,

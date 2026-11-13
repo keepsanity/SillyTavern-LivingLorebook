@@ -80,10 +80,14 @@ export const DEFAULT_SETTINGS = {
 
     // Summary 기반 AI 선택 (Phase 2)
     summarySelectionEnabled: false,    // 마스터 토글 (LL이 주입 통제 — 켜면 ST 네이티브 키워드/벡터 off)
+    llOnly: true,                      // LL 로어북이 있는 챗에선 전역·카드·페르소나 로어북 제외
     // 'hybrid' = BM25 + 벡터 RRF 융합 (UI "스마트", 기본, AI 호출 0)
     // 'bm25' = 텍스트 매칭만(UI "단어 매칭", 임베딩 의존성 0) · 'ai' = summary AI 선택(정밀·느림)
     // ('vector' 벡터만 옵션은 제거됨 — 하이브리드가 포함하므로 잉여. 저장값은 initStore에서 hybrid로 정규화)
     selectionEngine: 'hybrid',
+    jevSelectK: 8,
+    jevThreshold: 0.65,
+    jevZeroDataRetention: false, // Gateway enforcement requires Pro/Enterprise; no-training is always requested.
     vectorScanDepth: 4,                // 벡터 쿼리에 쓸 최근 메시지 수 (selectionScanDepth와 별개, 항상 그 이하)
     vectorSelectTopK: 50,              // 벡터 쿼리로 컬렉션당 가져올 후보 수 (융합 전 풀)
     // 유사도 하한 — 서버가 이 점수 미만을 잘라낸다(클라이언트는 점수를 못 받지만 서버는 갖고 있음).
@@ -122,9 +126,10 @@ export const DEFAULT_SETTINGS = {
     lastOrganizeTimestamp: null,
 
     // LLM 파라미터
-    organizeMaxTokens: 16000,
+    organizeMaxTokens: 32000,
     compressMaxTokens: 16000,
     worldBuildMaxTokens: 32000,
+    arcMaxTokens: 8000,                // Story Arc 생성 응답 상한 (리즈닝 모델은 생각에도 토큰을 쓰므로 넉넉히)
     arcChatLimit: 100,                 // Story Arc 생성 시 활성 chat 최대 N개만 사용 (토큰 폭증 방지)
     arcEntryContentLimit: 0,           // entry content trim 한도 (글자수). 0=truncate 안 함 (전체 본문)
 
@@ -132,6 +137,12 @@ export const DEFAULT_SETTINGS = {
     autoBackfillOnOrganize: true,      // organize 후 managed mode이면 backfill 자동
     autoArcOnOrganize: true,           // organize 후 첫 arc 생성 또는 기존 arc 업데이트, 하이드 전에 완료
     autoArcOnReorganize: true,         // reorganize 후 arc 업데이트 자동
+
+    // 연출 노트 (director.js)
+    directorAutoEnabled: true,
+    directorInterval: 20,              // AI 답변 N개마다 자동 갱신
+    directorChatLimit: 40,
+    directorMaxTokens: 4000,
 
     // 엔트리 메타데이터 { [uid]: { tier, originalContent, createdAt, ... } }
     entryMetadata: {},
@@ -300,6 +311,12 @@ export function initStore(context) {
     if (_settings.organizeMaxTokens <= 2000) {
         _settings.organizeMaxTokens = DEFAULT_SETTINGS.organizeMaxTokens;
     }
+    // Upgrade the old hidden default once; preserve explicit larger/custom budgets.
+    if (!_settings._organizeBudgetV2) {
+        if (_settings.organizeMaxTokens === 16000) _settings.organizeMaxTokens = 32000;
+        _settings._organizeBudgetV2 = true;
+        saveSettings();
+    }
     if (_settings.compressMaxTokens <= 500) {
         _settings.compressMaxTokens = DEFAULT_SETTINGS.compressMaxTokens;
     }
@@ -467,6 +484,7 @@ function inferCategory(title, content) {
     const head = t.split(/\s*[—–-]\s*/)[0] || t;   // 첫 구간 = 보통 대상의 이름
 
     if (/^story arc\b/i.test(t)) return 'arc';
+    if (/^director['’]s note\b/i.test(t)) return 'direction';
     if (/^(event|prior encounter|upcoming plan)\s*[—–\-:]/i.test(t)) return 'event';
     if (/[—–\-]\s*character\s*(profile|note)/i.test(t)) return 'character';
     if (/[—–\-]\s*relationship/i.test(t) || /relationship state/i.test(t)) return 'relationship';

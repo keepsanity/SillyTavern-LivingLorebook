@@ -14,6 +14,33 @@ export function isDirectSubject(candidate, text) {
     return [...(candidate.aliases || []), ...legacyNames, candidate.title].some(name => matchesName(name, text));
 }
 
+/** Characters named in the conversation, plus named open commitments and live relationships. Most recent mentions first. */
+export function directSubjects(candidates, text, recentText, settings) {
+    if (settings.keywordMatchEnabled === false) return [];
+    const out = [];
+    for (const c of candidates) {
+        if (!isDirectSubject(c, text)) continue;
+        const person = c.category === 'character';
+        if (!person && !c.openLoop && !(c.live && c.category === 'relationship')) continue;
+        const recent = isDirectSubject(c, recentText);
+        out.push({ ...c, direct: true, priority: person ? (recent ? 5 : 3) : (recent ? 4 : 2),
+            reason: (person ? l('ll.c962320ae566a7a3', "Direct name mention · character information") : l('ll.9d3e23d879937912', "Current relationship / unresolved commitment"))
+                + (recent ? l('ll.24bbf6458f4681db', " · recent conversation") : '') });
+    }
+    return out.sort((a, b) => b.priority - a.priority);
+}
+
+/** Named subjects stay in whatever Jev scored them; they hold at most half the limit while Jev has other picks waiting. */
+export function mergeDirectWithJev(direct, jevEntries, limit) {
+    const scores = new Map(jevEntries.map(e => [e.compositeKey, e.jevProbability]));
+    const directKeys = new Set(direct.map(e => e.compositeKey));
+    const others = jevEntries.filter(e => !directKeys.has(e.compositeKey)).length;
+    const named = direct.slice(0, Math.max(Math.ceil(limit / 2), limit - others))
+        .map(e => ({ ...e, jevProbability: scores.get(e.compositeKey) }));
+    const namedKeys = new Set(named.map(e => e.compositeKey));
+    return [...named, ...jevEntries.filter(e => !namedKeys.has(e.compositeKey))].slice(0, limit);
+}
+
 export function rankMemories(candidates, { vectorRanks, bm25Results, keywordHits, text, recentText = text, settings, vectorUnavailable }) {
     const bScores = new Map(bm25Results.map(r => [r.entry.compositeKey, r.score]));
     const bRanks = new Map(bm25Results.map((r, i) => [r.entry.compositeKey, i + 1]));

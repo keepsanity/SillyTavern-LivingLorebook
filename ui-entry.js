@@ -4,15 +4,19 @@ import { l, lt } from './i18n.js';
  * 인라인 편집 + 하이드/LIVE/핀 토글 + 삭제. 저장 후 refreshPanel()로 타임라인 갱신.
  */
 
-import { escapeHtml, escapeAttr, refreshPanel } from './ui-shared.js';
+import { escapeHtml, escapeAttr, refreshPanel, getViewLorebook, isViewingSideLorebook } from './ui-shared.js';
 import {
-    getSettings,
-    loadTargetLorebook, saveLorebook, refreshEditor,
+    loadTargetLorebook, loadAnyLorebook, saveLorebook, refreshEditor,
     getMetadata, stageMetadata, updateEntryFields, enableEntry, deactivateEntry, setEntryPinned, setMetadata, deleteEntry,
 } from './lore-store.js';
 import { clearSelectionCache } from './summary-retrieval.js';
 
 const LOG_PREFIX = '[LivingLorebook]';
+
+// 카드 액션은 타임라인이 지금 보여주는 로어북(메인 또는 사이드)에 적용된다
+async function loadViewLorebook() {
+    return isViewingSideLorebook() ? loadAnyLorebook(getViewLorebook()) : loadTargetLorebook();
+}
 
 const CATEGORY_LABELS = {
     arc: l('ll.687bf8f66ea0f585', "Story Arc"),
@@ -27,7 +31,7 @@ export function openInlineEditor(card, uid) {
     const title = card.querySelector('.ll-entry-title')?.textContent.replace(/HIDE\s*$/, '').trim() || '';
     const rawContent = card.querySelector('.ll-entry-content')?.dataset?.raw || '';
     const currentCat = card.dataset.category || 'fact';
-    const metadata = getMetadata(uid, getSettings().targetLorebook) || {};
+    const metadata = getMetadata(uid, getViewLorebook()) || {};
     const currentKeywords = Array.from(card.querySelectorAll('.ll-entry-keyword')).map(el => el.textContent);
 
     card.classList.add('ll-editing');
@@ -93,7 +97,7 @@ function closeInlineEditor(card) {
 }
 
 async function saveInlineEdit(card, uid, form) {
-    const settings = structuredClone(getSettings());
+    const book = getViewLorebook();
     const newTitle = form.querySelector('.ll-edit-title')?.value?.trim() || 'untitled';
     const newContent = form.querySelector('.ll-edit-content')?.value?.trim() || '';
     const newCat = form.querySelector('.ll-edit-cat')?.value || 'fact';
@@ -101,7 +105,7 @@ async function saveInlineEdit(card, uid, form) {
     const newKeywords = keywordsRaw.split(',').map(k => k.trim()).filter(Boolean);
 
     try {
-        const data = await loadTargetLorebook();
+        const data = await loadViewLorebook();
         if (!data) throw new Error(l('ll.348562f0779ac6cd', "Could not load the lorebook."));
 
         updateEntryFields(data, uid, {
@@ -109,13 +113,13 @@ async function saveInlineEdit(card, uid, form) {
             content: newContent,
             keywords: newKeywords,
             category: newCat,
-        }, settings.targetLorebook);
+        }, book);
 
         stageMetadata(data, uid, {
             aliases: (form.querySelector('.ll-edit-aliases')?.value || '').split(',').map(v => v.trim()).filter(Boolean),
             openLoop: !!form.querySelector('.ll-edit-open-loop')?.checked,
-        }, settings.targetLorebook);
-        await saveLorebook(settings.targetLorebook, data);
+        }, book);
+        await saveLorebook(book, data);
         clearSelectionCache();
         refreshEditor();
         toastr.success(l('ll.ba971bfea1b3477d', "Saved."));
@@ -127,9 +131,9 @@ async function saveInlineEdit(card, uid, form) {
 }
 
 export async function handleEntryHideToggle(uid) {
-    const settings = structuredClone(getSettings());
+    const book = getViewLorebook();
     try {
-        const data = await loadTargetLorebook();
+        const data = await loadViewLorebook();
         if (!data?.entries?.[uid]) throw new Error(l('ll.1081a83f7d861645', "Entry not found."));
 
         const entry = data.entries[uid];
@@ -141,7 +145,7 @@ export async function handleEntryHideToggle(uid) {
             toastr.info(l('ll.660d8489c2ec4c9c', "Entry hidden."));
         }
 
-        await saveLorebook(settings.targetLorebook, data);
+        await saveLorebook(book, data);
         refreshEditor();
         await refreshPanel();
     } catch (err) {
@@ -151,11 +155,11 @@ export async function handleEntryHideToggle(uid) {
 }
 
 export async function handleEntryLiveToggle(uid, live) {
-    const settings = structuredClone(getSettings());
+    const book = getViewLorebook();
     try {
         // live는 순수 LL 메타데이터(WI 필드 아님) → setMetadata가 알아서 저장.
         // organize 때 이 플래그된 엔트리만 풀 내용으로 보내 갱신한다.
-        await setMetadata(uid, { live }, settings.targetLorebook);
+        await setMetadata(uid, { live }, book);
         clearSelectionCache();
         await refreshPanel();
         toastr.info(live
@@ -168,13 +172,13 @@ export async function handleEntryLiveToggle(uid, live) {
 }
 
 export async function handleEntryPinToggle(uid, pinned) {
-    const settings = structuredClone(getSettings());
+    const book = getViewLorebook();
     try {
-        const data = await loadTargetLorebook();
+        const data = await loadViewLorebook();
         if (!data?.entries?.[uid]) throw new Error(l('ll.1081a83f7d861645', "Entry not found."));
 
         setEntryPinned(data, uid, pinned);
-        await saveLorebook(settings.targetLorebook, data);
+        await saveLorebook(book, data);
         refreshEditor();
         clearSelectionCache();
         await refreshPanel();
@@ -186,15 +190,15 @@ export async function handleEntryPinToggle(uid, pinned) {
 }
 
 export async function handleEntryDelete(uid) {
-    const settings = structuredClone(getSettings());
+    const book = getViewLorebook();
     if (!confirm(l('ll.dec17b6f3883b782', "Permanently delete this entry? This cannot be undone."))) return;
 
     try {
-        const data = await loadTargetLorebook();
+        const data = await loadViewLorebook();
         if (!data?.entries?.[uid]) throw new Error(l('ll.1081a83f7d861645', "Entry not found."));
 
-        deleteEntry(data, uid, settings.targetLorebook);
-        await saveLorebook(settings.targetLorebook, data);
+        deleteEntry(data, uid, book);
+        await saveLorebook(book, data);
         refreshEditor();
         toastr.success(l('ll.977dfc49dbc7d8b2', "Deleted."));
         await refreshPanel();

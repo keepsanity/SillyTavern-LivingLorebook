@@ -13,7 +13,7 @@ import {
     getMetadata, stageMetadata,
     countTokens, isManagedMode,
 } from './lore-store.js';
-import { insertEntries, deleteEntries, getCollectionId, getEntryHash } from './vector-service.js';
+import { insertEntries, deleteEntries, getCollectionId, getEntryHashes } from './vector-service.js';
 
 const LOG_PREFIX = '[LivingLorebook]';
 
@@ -84,7 +84,7 @@ Rules:
 
     console.log(`${LOG_PREFIX} Asking AI to classify ${tier1Entries.length} entries for compression...`);
 
-    const response = await callLLM(systemPrompt, userPrompt, 1000, settings);
+    const response = await callLLM(systemPrompt, userPrompt, Number(settings.compressMaxTokens) || 16000, settings);
 
     let classification;
     try {
@@ -133,7 +133,7 @@ Rules:
             }
 
             // 기존 벡터 삭제
-            deleteHashes.push(getEntryHash(uid, entry.content));
+            deleteHashes.push(...getEntryHashes(uid, entry.content));
 
             // 엔트리 업데이트
             updateEntryContent(data, uid, compressedText, settings.targetLorebook);
@@ -241,7 +241,7 @@ export async function backfillSummaries(options = {}) {
         const userPrompt = settings.summaryBackfillPrompt.replace('{{entries}}', entriesBlock);
 
         try {
-            const response = await callLLM(systemPrompt, userPrompt, 2000, settings);
+            const response = await callLLM(systemPrompt, userPrompt, Number(settings.compressMaxTokens) || 16000, settings);
             const cleaned = response.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '').trim();
             const parsed = JSON.parse(cleaned);
 
@@ -390,7 +390,7 @@ export async function generateStoryArc() {
     const totalEntries = Object.values(entriesByCategory).reduce((sum, arr) => sum + arr.length, 0);
     console.log(`${LOG_PREFIX} Generating story arc (active chat: ${recentActive.length}/${activeChat.length}, hidden: ${chat.length - activeChat.length}, entries: ${totalEntries}, existing arc: ${existingUid ? 'yes' : 'no'})...`);
 
-    const arcText = await callLLM(systemPrompt, userPrompt, 2000, settings);
+    const arcText = await callLLM(systemPrompt, userPrompt, Number(settings.arcMaxTokens) || 8000, settings);
     if (!arcText || !arcText.trim()) {
         throw new Error(l('ll.ef9e91a0eb7995ec', "The AI returned an empty response."));
     }

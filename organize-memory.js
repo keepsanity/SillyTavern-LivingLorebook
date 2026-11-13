@@ -2,7 +2,8 @@ import { l } from './i18n.js';
 import { getSettings, loadAnyLorebook, getMetadata, stageMetadata, createEntry, updateEntryContent,
     saveLorebook, operationContext, isOperationCurrent, saveSettings } from './lore-store.js';
 import { callLLM } from './llm-service.js';
-import { MEMORY_POLICY, ORGANIZE_SCHEMA, validateProposal } from './memory-policy.js';
+import { name1, name2, chat_metadata, saveMetadata } from '../../../../script.js';
+import { MEMORY_POLICY, ORGANIZE_SCHEMA, continuityThreads, validateProposal } from './memory-policy.js';
 import { buildBM25 } from './bm25.js';
 import { updateHistory } from './history-storage.js';
 
@@ -32,13 +33,14 @@ export async function organizeMemories(chat, characterContext = '', options = {}
         if (!indices.length) return { added: 0, updated: 0, deactivated: 0, processedIndices: [], operation: op };
         const metadata = {};
         const entryLines = [];
-        const staticCandidates = Object.entries(data.entries || {}).filter(([uid, e]) => !e.disable && !getMetadata(uid, op.book)?.live)
+        const staticCandidates = Object.entries(data.entries || {}).filter(([uid, e]) => !e.disable && !getMetadata(uid, op.book)?.live && getMetadata(uid, op.book)?.category !== 'direction')
             .map(([uid, e]) => ({ uid, title: e.comment, content: e.content }));
         const nearby = new Set(buildBM25(staticCandidates, { textOf: e => `${e.title} ${e.content}` })
             .search(messages.join('\n'), 24).map(r => r.entry.uid));
         for (const [uid, e] of Object.entries(data.entries || {})) {
             metadata[uid] = structuredClone(getMetadata(uid, op.book) || {});
-            if (e.disable) continue;
+            // 연출 노트는 앞으로의 계획이라 기억 정리에 섞지 않는다
+            if (e.disable || metadata[uid].category === 'direction') continue;
             // Read full LIVE state and relevant static memories; retain all other titles as an index.
             const full = metadata[uid].live || nearby.has(uid);
             const meta = metadata[uid];
@@ -48,13 +50,32 @@ export async function organizeMemories(chat, characterContext = '', options = {}
         }
         const prompt = settings.organizePrompt.replace('{{currentEntries}}', entryLines.join('\n\n'))
             .replace('{{conversation}}', messages.join('\n\n'));
-        const raw = await callLLM(`${MEMORY_POLICY}\n${ORGANIZE_SCHEMA}\nCharacter/persona already supplied to RP:\n${characterContext}`,
-            prompt, settings.organizeMaxTokens, settings);
-        const proposal = validateProposal(raw, data, metadata, indices);
+        const charName = name2 || 'Character';
+        const userName = name1 || 'User';
+        const mentions = (text, name) => String(text || '').toLowerCase().includes(String(name).toLowerCase());
+        // The pair's LIVE relationship entry, if one already exists, is updated rather than re-added.
+        const pairUid = Object.entries(data.entries || {}).find(([uid, e]) => !e.disable && metadata[uid]?.live
+            && metadata[uid]?.category === 'relationship' && mentions(e.comment, charName) && mentions(e.comment, userName))?.[0] ?? null;
+        const systemPrompt = `${MEMORY_POLICY}\n${ORGANIZE_SCHEMA}\n${continuityThreads(charName, userName, pairUid)}\nCharacter/persona already supplied to RP:\n${characterContext}`;
+        let proposal;
+        for (let attempt = 0; attempt < 2; attempt++) {
+            if (!isOperationCurrent(op) || indices.some(i => messageSignature(chat[i]) !== signatures[i])) {
+                throw new Error(l('ll.05359fcc3600ab28', 'The chat or target lorebook changed. Applying changes was cancelled.'));
+            }
+            const raw = await callLLM(systemPrompt, prompt + (attempt ? '\n\nThe previous response could not be parsed. Return exactly ONE complete JSON object with add, update, deactivate arrays. No explanation or markdown. Escape quotes and newlines within strings. Preserve the requested facts; do not return an incomplete object.' : ''),
+                settings.organizeMaxTokens, settings);
+            try { proposal = validateProposal(raw, data, metadata, indices); break; }
+            catch (error) {
+                if (error.code !== 'LL_INVALID_JSON' || attempt) throw error;
+                globalThis.toastr?.info?.(l('ll.organize.retryJSON', 'The AI returned unreadable JSON. Retrying once automatically.'));
+            }
+        }
         for (const change of proposal.changes) {
             if (change.type !== 'update') continue;
             const previous = metadata[String(change.uid)].lastEvidence;
-            if (previous && previous.chatId !== op.chatId) {
+            // A branch shares its parent's history: the same source message at the same index proves it.
+            const sharedHistory = previous?.signature && messageSignature(chat[previous.index]) === previous.signature;
+            if (previous && previous.chatId !== op.chatId && !sharedHistory) {
                 throw new Error(l('ll.7f7ef01274c0e0de', "This LIVE memory was updated in another chat. Use separate lorebooks for branches or review it manually."));
             }
             if (previous && Math.max(...change.sourceMessages) < previous.index) {
@@ -66,7 +87,13 @@ export async function organizeMemories(chat, characterContext = '', options = {}
         }
         const assertCurrent = () => {
             if (!isOperationCurrent(op)) throw new Error(l('ll.05359fcc3600ab28', "The chat or target lorebook changed. Applying changes was cancelled."));
-            if (indices.some(i => messageSignature(chat[i]) !== signatures[i])) throw new Error(l('ll.923264e0c75da77a', "The conversation changed during analysis. Applying changes was cancelled."));
+            const changed = indices.filter(i => messageSignature(chat[i]) !== signatures[i]);
+            if (changed.length) {
+                const diag = { at: new Date().toISOString(), chatLength: chat.length, changed: changed.map(i => ({ i, before: signatures[i], after: messageSignature(chat[i]) })) };
+                console.warn('[LivingLorebook] changed during analysis:', diag);
+                try { chat_metadata.ll_last_error = diag; saveMetadata(); } catch (e) { console.warn('[LivingLorebook] could not save diag', e); }
+                throw new Error(l('ll.923264e0c75da77a', "The conversation changed during analysis. Applying changes was cancelled.") + ` [#${changed.slice(0, 8).join(', #')}${changed.length > 8 ? '…' : ''} / ${chat.length}]`);
+            }
             for (const change of proposal.changes.filter(c => c.type === 'update')) {
                 if (JSON.stringify(getMetadata(change.uid, op.book) || {}) !== JSON.stringify(metadata[change.uid])) {
                     throw new Error(l('ll.1f9c24cea7ee95c6', "LIVE settings or memory metadata changed during analysis. Organize again."));

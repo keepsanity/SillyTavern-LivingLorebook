@@ -135,6 +135,32 @@ export function getCollectionId(lorebookName) {
     return `ll_${lorebookName}`;
 }
 
+/** Index layout version — bump when item granularity or hashing changes so stale indexes reindex. */
+export const VECTOR_INDEX_SCHEME = 'p1';
+
+// 문단 최소 길이 — 이보다 짧은 줄(제목, 목록 항목)은 다음 문단에 붙인다.
+const MIN_PARAGRAPH_CHARS = 160;
+
+/**
+ * 엔트리 본문을 문단 단위로 나눈다 — 줄바꿈 기준, 짧은 조각은 인접 문단과 합침.
+ * 색인과 조회가 같은 함수를 쓰므로 결정적이어야 한다(입력이 같으면 결과도 같음).
+ * @returns {string[]} 최소 1개 (빈 본문이면 [''])
+ */
+export function splitParagraphs(text, minChars = MIN_PARAGRAPH_CHARS) {
+    const lines = String(text ?? '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const out = [];
+    let buf = '';
+    for (const line of lines) {
+        buf = buf ? `${buf}\n${line}` : line;
+        if (buf.length >= minChars) { out.push(buf); buf = ''; }
+    }
+    if (buf) {
+        if (out.length > 0 && buf.length < minChars) out[out.length - 1] += `\n${buf}`;
+        else out.push(buf);
+    }
+    return out.length > 0 ? out : [''];
+}
+
 // 임베딩 입력 길이 캡 — 소스별로 다름. 검색용 벡터만 앞부분 기준으로 만들고
 // 실제 엔트리 본문/주입 내용은 안 건드림.
 //
@@ -181,12 +207,14 @@ async function describeFailure(response, what) {
  * 엔트리들을 벡터 DB에 삽입
  */
 export async function insertEntries(collectionId, entries) {
-    const items = entries.map(e => ({
-        // 해시 = uid only. 내용 수정해도 해시 고정 → 쿼리 결과를 uid로 안정 매핑 (고아 방지).
-        // 임베딩 자체는 stale 가능 → reindexCollection으로 갱신.
-        hash: getStringHash(String(e.uid)),
-        text: clampForEmbedding(`${e.title || e.comment || ''}: ${e.content}`),
-    }));
+    // 엔트리 하나 → 문단마다 아이템 하나. 해시 = uid#문단번호 (내용 수정에도 고정, 재색인으로 갱신).
+    const items = [];
+    for (const e of entries) {
+        const title = e.title || e.comment || '';
+        splitParagraphs(e.content).forEach((para, i) => {
+            items.push({ hash: getParagraphHash(e.uid, i), text: clampForEmbedding(`${title}: ${para}`) });
+        });
+    }
 
     if (items.length === 0) return;
 
@@ -206,7 +234,7 @@ export async function insertEntries(collectionId, entries) {
         throw await describeFailure(response, lt('ll.bebf30d87f6392d0')`Vector insert (${collectionId})`);
     }
 
-    console.log(`${LOG_PREFIX} Inserted ${items.length} vectors into ${collectionId}`);
+    console.log(`${LOG_PREFIX} Inserted ${items.length} paragraph vectors for ${entries.length} entries into ${collectionId}`);
 }
 
 /**
@@ -285,9 +313,26 @@ async function purgeCollection(collectionId) {
 
 /**
  * 엔트리의 벡터 해시 계산 — uid only (content 인자는 하위호환용, 무시).
+ * 문단 아이템 해시는 getParagraphHash / getEntryHashes 참고.
  */
 export function getEntryHash(uid) {
     return getStringHash(String(uid));
+}
+
+/** Paragraph item hash: scoped by entry uid and paragraph index. */
+export function getParagraphHash(uid, index) {
+    return getStringHash(`${uid}#${index}`);
+}
+
+/**
+ * 엔트리가 인덱스에 남긴 해시 전부 — 문단 아이템들 + 레거시 엔트리 단위 해시.
+ * 삭제/조회 매핑에서 쓴다. 분할이 결정적이므로 content만 있으면 재계산 가능.
+ */
+export function getEntryHashes(uid, content) {
+    const paragraphs = splitParagraphs(content);
+    const hashes = paragraphs.map((_, i) => getParagraphHash(uid, i));
+    hashes.push(getEntryHash(uid));
+    return hashes;
 }
 
 /**

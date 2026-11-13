@@ -253,6 +253,10 @@
         padding: 6px 12px;
     }
 
+    .ll-book-bar {
+        padding: 6px 12px 0;
+    }
+
     .ll-timeline {
         padding: 12px;
     }
@@ -443,6 +447,38 @@
     border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.06));
     overflow-x: auto;
     flex-shrink: 0;
+}
+
+/* 메인/사이드 로어북 전환 칩 줄 — 필터 바와 같은 모양, 사이드 로어북이 있을 때만 표시 */
+.ll-book-bar {
+    display: flex;
+    gap: 6px;
+    padding: 8px 20px 0;
+    overflow-x: auto;
+    flex-shrink: 0;
+}
+
+.ll-book-chip {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ll-book-toggle {
+    padding: 4px 8px;
+    min-width: 28px;
+    flex-shrink: 0;
+}
+
+.ll-book-toggle.ll-book-toggle-open {
+    background: rgba(99, 179, 237, 0.15);
+    border-color: rgba(99, 179, 237, 0.4);
+    color: #63b3ed;
+}
+
+.ll-book-toggle.ll-book-toggle-side {
+    border-color: rgba(129, 230, 217, 0.6);
+    color: #81e6d9;
 }
 
 .ll-filter-chip {
@@ -1071,6 +1107,49 @@
     flex-direction: column;
     gap: 12px;
 }
+.ll-selection-options > .ll-settings-row:has(input[type="number"]):not(.ll-eng-hybrid) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 76px;
+    align-items: center;
+}
+.ll-selection-options > .ll-settings-row:has(> input[type="checkbox"]) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+}
+.ll-settings-row > input[type="checkbox"].ll-settings-input {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    margin: 0;
+}
+
+.ll-selection-options .ll-settings-row label {
+    min-width: 0;
+    line-height: 1.5;
+    word-break: keep-all;
+}
+
+.ll-selection-options .ll-settings-unit {
+    grid-column: 1 / -1;
+    font-size: 11px;
+    line-height: 1.5;
+    opacity: 0.6;
+}
+
+.ll-selection-options input[type="number"] {
+    width: 76px;
+    box-sizing: border-box;
+}
+
+.ll-selection-note {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.6;
+    opacity: 0.6;
+    word-break: keep-all;
+}
+
 .ll-settings-group.collapsed {
     display: none;
 }
@@ -1079,6 +1158,101 @@
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+/* Override ST's min-content button width: Korean labels must stay horizontal. */
+.ll-panel .ll-settings-row .menu_button,
+.ll-jev-connection .menu_button {
+    width: auto;
+    min-width: max-content;
+    flex-shrink: 0;
+    white-space: nowrap;
+    word-break: keep-all;
+}
+
+.ll-eng-jev .ll-settings-row,
+.ll-jev-connection .ll-settings-row {
+    flex-wrap: wrap;
+}
+
+.ll_settings .ll-jev-connection {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--SmartThemeBorderColor);
+}
+
+.ll-jev-heading {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.ll-jev-provider {
+    font-size: 12px;
+    opacity: 0.6;
+}
+
+.ll-jev-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 13px;
+}
+
+.ll_settings .ll-jev-connection #ll_s_jev_key {
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    box-sizing: border-box;
+}
+
+.ll-jev-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.ll_settings .ll-jev-actions .menu_button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 32px;
+    margin: 0;
+    padding: 6px 12px;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.ll-jev-status {
+    font-size: 12px;
+    line-height: 1.5;
+    opacity: 0.75;
+    overflow-wrap: anywhere;
+}
+
+.ll-jev-details {
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.ll-jev-details summary {
+    cursor: pointer;
+    opacity: 0.7;
+}
+
+.ll-jev-details p {
+    margin: 8px 0;
+    opacity: 0.75;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+}
+
+.ll_settings .ll-jev-details .checkbox_label {
+    align-items: flex-start;
 }
 
 .ll-settings-row label {

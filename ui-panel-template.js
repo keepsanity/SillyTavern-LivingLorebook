@@ -1,4 +1,5 @@
-import { lt } from './i18n.js';
+import { l, lt } from './i18n.js';
+import { JEV_SETTINGS } from './jev-ui.js';
 /**
  * UI — 패널 HTML 템플릿.
  * createPanel()이 innerHTML로 넣는 마크업 원본. 순수 문자열(로직 없음)이라
@@ -231,17 +232,17 @@ export const PANEL_HTML = lt('ll.de3167c9f6f361c6')`
             </div>
 
             <!-- Advanced settings by engine -->
-            <div class="ll-settings-section-title ll-collapsible collapsed" data-toggle="ll_s_adv_tuning">
-                <i class="fa-solid fa-sliders"></i> Advanced Settings
-                <span style="font-size:10px;opacity:0.5;font-weight:400;margin-left:auto;">Engine: <span id="ll_s_engine_label">Hybrid</span></span>
+            <div class="ll-settings-section-title ll-collapsible" data-toggle="ll_s_adv_tuning">
+                <i class="fa-solid fa-sliders"></i> Selection options
+                
                 <i class="fa-solid fa-chevron-down ll-collapse-chevron"></i>
             </div>
-            <div class="ll-settings-group collapsed" id="ll_s_adv_tuning">
+            <div class="ll-settings-group ll-selection-options" id="ll_s_adv_tuning">
                 <!-- Scan range -->
                 <div class="ll-settings-row">
                     <label>Conversation scan depth</label>
                     <input class="ll-settings-input" id="ll_s_scan_depth" type="number" min="1" max="50" />
-                    <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">Latest N messages — all engines</span>
+                    <span class="ll-settings-unit">Number of recent messages to read.</span>
                 </div>
                 <div class="ll-settings-row ll-eng-vec">
                     <label>Vector query window</label>
@@ -299,7 +300,7 @@ export const PANEL_HTML = lt('ll.de3167c9f6f361c6')`
                         <span>BM25 prefilter <span style="font-size:10px;opacity:0.6;">(recommended on; no vector dependency)</span></span>
                     </label>
                 </div>
-                <div class="ll-settings-row">
+                <div class="ll-settings-row ll-eng-bm25-pool">
                     <label>BM25 prefilter Top-K</label>
                     <input class="ll-settings-input" id="ll_s_bm25_prefilter_k" type="number" min="5" max="500" />
                     <span class="ll-settings-unit" style="font-size:10px;opacity:0.6;">BM25 candidate pool size</span>
@@ -321,16 +322,10 @@ export const PANEL_HTML = lt('ll.de3167c9f6f361c6')`
                 <div class="ll-settings-row">
                     <label class="checkbox_label" style="flex:1;">
                         <input id="ll_s_cache_enabled" type="checkbox" />
-                        <span>Cache selections for swipes / regeneration</span>
+                        <span>Reuse selections when context is unchanged</span>
                     </label>
                 </div>
-                <div class="ll-settings-row" style="flex-direction:column;align-items:stretch;gap:4px;opacity:0.6;">
-                    <div style="font-size:11px;line-height:1.4;">
-                        <i class="fa-solid fa-circle-info" style="color:#fbbf24;"></i>
-                        <b>Insertion position/depth follows entry settings and the ST preset's World Info slots.</b>
-                        LL activates entries in World Info. Change entry position/depth in the ST World Info editor.
-                    </div>
-                </div>
+                <p class="ll-selection-note">Set memory insertion positions in the World Info entry settings.</p>
             </div>
 
             <div class="ll-settings-section-title ll-collapsible collapsed" data-toggle="ll_s_prompts">
@@ -383,4 +378,8 @@ export const PANEL_HTML = lt('ll.de3167c9f6f361c6')`
                 <i class="fa-solid fa-rotate"></i>
             </button>
         </div>
-`;
+`.replace(/(<option value="ai">[^<]*<\/option>)/, `$1<option value="jev">${l('ll.jev.option', 'Jev selection')}</option>`)
+    .replace(/(<div class="ll-settings-group ll-selection-options" id="ll_s_adv_tuning">)/, `$1${JEV_SETTINGS}`)
+    .replace(/(<button class="ll-toolbar-btn arc" data-action="arc">[\s\S]*?<\/button>)/, `$1<button class="ll-toolbar-btn direction" data-action="direction"><i class="fa-solid fa-clapperboard"></i> ${l('ll.director.button', 'Director')}</button>`)
+    .replace(/(<button class="ll-filter-chip" data-filter="arc">[\s\S]*?<\/button>)/, `$1<button class="ll-filter-chip" data-filter="direction"><i class="fa-solid fa-clapperboard" style="margin-right:3px;font-size:10px;"></i>${l('ll.director.chip', "Director's Note (spoiler)")}</button>`)
+    .replace(/(<input id="ll_s_selection_enabled"[\s\S]*?<\/div>)/, `$1<div class="ll-settings-row"><label class="checkbox_label" style="flex:1;"><input id="ll_s_ll_only" type="checkbox" /><span>${l('ll.llOnly.label', 'LL lorebooks only')} <span style="font-size:10px;opacity:0.6;">${l('ll.llOnly.hint', '(global, character and persona lorebooks stay out of chats that have LL lorebooks)')}</span></span></label></div>`);

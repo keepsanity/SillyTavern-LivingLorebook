@@ -1,5 +1,7 @@
 import { l, lt } from './i18n.js';
-import { rankMemories, fitMemoryBudget } from './retrieval-policy.js';
+import { rankMemories, fitMemoryBudget, directSubjects, mergeDirectWithJev } from './retrieval-policy.js';
+import { selectWithJev, clearJevCache, flagUnknownToCharacter } from './jev-retrieval.js';
+import { name2 } from '../../../../script.js';
 /**
  * Summary-based Retrieval — 매 generation 직전 AI가 summary 보고 top-N 엔트리 선택
  *
@@ -28,6 +30,8 @@ import {
     reindexCollection,
     getVectorSourceSignature,
     getEmbedMaxChars,
+    getEntryHashes,
+    VECTOR_INDEX_SCHEME,
 } from './vector-service.js';
 import { buildBM25 } from './bm25.js';
 
@@ -58,6 +62,13 @@ let _lastInjection = {
 const _selectInflight = new Map();
 let _selectionEpoch = 0;
 let _lastTrace = { entries: [], omitted: [], stage: '', actual: null };
+let _offscriptMemory = null;
+export function getOffscriptMemory(chatId) {
+    if (!_offscriptMemory || _offscriptMemory.chatId !== chatId || !isOperationCurrent(_offscriptMemory.operation)) return null;
+    const actual = _lastTrace.actual;
+    const entries = actual === null ? _offscriptMemory.entries : _offscriptMemory.entries.filter(e => actual.some(a => a.compositeKey === e.id));
+    return structuredClone({ entries, activationConfirmed: actual !== null });
+}
 export function getSelectionTrace() { return structuredClone(_lastTrace); }
 export function recordActivatedEntries(entries) {
     const keys = new Set(entries.map(e => `${e.world}::${e.uid}`));
@@ -65,6 +76,8 @@ export function recordActivatedEntries(entries) {
 }
 
 export function clearSelectionCache() {
+    _offscriptMemory = null;
+    clearJevCache();
     _selectionEpoch++;
     _lastTrace = { entries: [], omitted: [], stage: '', actual: null };
     _lastInjection = { totalTokens: 0, entryCount: 0, perLorebook: {}, timestamp: 0, fromCache: false };
@@ -211,7 +224,8 @@ export async function selectEntries(chat) {
     const epoch = _selectionEpoch;
     const snapshot = structuredClone(chat);
     const settings = structuredClone(getSettings());
-    const key = JSON.stringify([op, epoch, snapshot.slice(-(settings.selectionScanDepth || 8)), getEffectiveSelectionLorebooks(), settings.selectionEngine]);
+    const key = JSON.stringify([op, epoch, snapshot.slice(-(settings.selectionScanDepth || 8)), getEffectiveSelectionLorebooks(), settings.selectionEngine,
+        settings.jevSelectK, settings.jevThreshold, settings.jevZeroDataRetention]);
     if (_selectInflight.has(key)) return _selectInflight.get(key);
     const run = (async () => {
         if (settings.selectionEngine === 'hybrid') {
@@ -230,11 +244,32 @@ export async function selectEntries(chat) {
             perLorebook[e.lorebookName].tokens += e.tokens;
         }
         _lastInjection = { totalTokens: fitted.tokens, entryCount: fitted.entries.length, perLorebook, timestamp: Date.now(), fromCache: result.fromCache };
-        _lastTrace = { entries: fitted.entries.map(e => ({ compositeKey: e.compositeKey, title: e.title, lorebookName: e.lorebookName, reason: e.reason || l('ll.85692c510bf4f3af', "AI selection"), tokens: e.tokens })), omitted: fitted.omitted, stage: result.stage, actual: null };
+        _lastTrace = { entries: fitted.entries.map(e => ({ compositeKey: e.compositeKey, title: e.title, lorebookName: e.lorebookName, reason: e.reason || l('ll.85692c510bf4f3af', "AI selection"), tokens: e.tokens })), omitted: fitted.omitted, stage: result.stage, actual: null, jev: result.jev };
+        _offscriptMemory = { chatId: operationContext().chatId, operation: operationContext(),
+            entries: fitted.entries.map(e => ({ id: e.compositeKey, title: e.title, content: e.content || e.summary || '' })) };
         return { ...result, entries: fitted.entries };
     })();
     _selectInflight.set(key, run);
     try { return await run; } finally { _selectInflight.delete(key); }
+}
+
+/**
+ * LL만 쓰기: 이 챗에 LL 로어북(대상/사이드)이 있으면 그 밖의 로어북 엔트리를 후보에서 뺀다.
+ * @param {{globalLore: object[], characterLore: object[], chatLore: object[], personaLore: object[]}} lore
+ */
+export function restrictToLLLorebooks(lore) {
+    const settings = getSettings();
+    if (!settings.enabled || settings.llOnly === false) return;
+    const books = getEffectiveSelectionLorebooks();
+    if (books.length === 0) return;
+    let removed = 0;
+    for (const arr of [lore.globalLore, lore.characterLore, lore.chatLore, lore.personaLore]) {
+        if (!Array.isArray(arr)) continue;
+        for (let i = arr.length - 1; i >= 0; i--) {
+            if (!books.includes(arr[i]?.world)) { arr.splice(i, 1); removed++; }
+        }
+    }
+    if (removed > 0) console.log(`${LOG_PREFIX} LL-only: excluded ${removed} entries outside ${books.join(', ')}`);
 }
 
 /**
@@ -369,7 +404,7 @@ async function _selectCore(chat) {
                 category: meta?.category || 'fact',
                 summary,
                 aliases: Array.isArray(meta?.aliases) ? meta.aliases : [],
-                live: !!meta?.live, openLoop: !!meta?.openLoop,
+                live: !!meta?.live, openLoop: !!meta?.openLoop, lastEvidence: meta?.lastEvidence || null,
                 rawEntry: { ...entry, key: entry.key?.length ? entry.key : (meta?.keywords || []) },  // ST WI 시스템에 force-activate 시 통째 전달
             });
         }
@@ -404,8 +439,43 @@ async function _selectCore(chat) {
     // 기본 'hybrid': BM25 + 벡터를 RRF로 융합 → 즉시 (AI/manifest/캐시 전부 스킵)
     // 'vector' = 벡터만, 'bm25' = 벡터 없이 텍스트 매칭만 (임베딩 의존성 0)
     const engine = settings.selectionEngine || 'hybrid';
+    if (engine === 'jev') {
+        const op = operationContext();
+        const epoch = _selectionEpoch;
+        const isCurrent = () => epoch === _selectionEpoch && isOperationCurrent(op);
+        showSelectionIndicator(30000);
+        try {
+            const pool = candidates.length > JEV_FULL_SCAN_LIMIT
+                ? await jevShortlist(candidates, chatText, vectorText, settings, lorebooks) : candidates;
+            const result = await selectWithJev(pool, chatText, { ...settings, jevCacheScope: JSON.stringify([op, epoch]) }, isCurrent);
+            // A person the conversation names is included whatever Jev scored them, as in the hybrid engine.
+            const limit = Math.max(1, Math.min(50, Number(settings.jevSelectK) || 8));
+            const merged = mergeDirectWithJev(directSubjects(candidates, chatText, vectorText, settings), result.entries, limit);
+            const named = merged.filter(e => e.direct).length;
+            const known = await flagUnknownToCharacter(merged, chatText, name2, settings, isCurrent);
+            const shortlisted = pool === candidates ? '' : ` · shortlist ${pool.length}/${candidates.length}`;
+            // Only memories the character actually holds, and that Jev judged as fitting the scene, can resurface.
+            const held = known.entries.filter(e => !e.unknownToChar && !(e.direct && e.jevProbability === undefined));
+            const callback = pickCallback(held, new Set(held.map(e => e.compositeKey)), chat.length);
+            const jevReason = e => lt('ll.jev.reason')`Jev context relevance: ${Math.round(e.jevProbability * 100)}%`;
+            return { ...result, stage: result.stage + shortlisted + (named ? ` · named ${named}` : ''), entries: known.entries.map(e => ({ ...e,
+                callback: e.compositeKey === callback?.compositeKey,
+                reason: (e.direct ? e.reason + (e.jevProbability === undefined ? '' : ' · ' + jevReason(e)) : jevReason(e))
+                    + (e.unknownToChar ? l('ll.jev.unknownToChar', " · narrator only (character does not know)") : '')
+                    + (e.compositeKey === callback?.compositeKey ? ' · ' + l('ll.callback.reason', "Past moment worth recalling") : ''),
+            })) };
+        } catch (error) {
+            if (!isCurrent()) return { entries: [], fromCache: false, stage: 'stale-discarded' };
+            const known = ['missing_key', 'server_restart', 'upstream_401', 'upstream_402', 'upstream_403', 'upstream_429',
+                'upstream_error', 'invalid_request', 'invalid_response', 'timeout', 'connection_failed', 'context_limit', 'batch_limit'];
+            const code = known.includes(error.message) ? error.message : 'connection_failed';
+            // Local-only fallback: no vectors, no second provider, no RP content in logs.
+            const fallback = await _selectFast(candidates, { bm25: chatText, vector: '' }, settings, lorebooks, 'bm25');
+            return { ...fallback, stage: `jev-fallback:${code} → ${fallback.stage}`, jev: { error: code } };
+        } finally { hideSelectionIndicator(); }
+    }
     if (engine !== 'ai') {
-        return await _selectFast(candidates, { bm25: chatText, vector: vectorText }, settings, lorebooks, engine);
+        return await _selectFast(candidates, { bm25: chatText, vector: vectorText, chatLength: chat.length }, settings, lorebooks, engine);
     }
 
     // 이하 'ai' 엔진 — manifest 힌트가 필요하므로 summary 있는 후보만 사용
@@ -692,11 +762,16 @@ async function _vectorRanks(candidates, queryText, settings, lorebooks) {
         return { ranks: new Map(), ms: 0, note: 'source-changed' };
     }
 
-    // 해시(uid only) → candidate. uid는 컬렉션 내에서만 유일하므로 로어북 스코프로 키 구성
+    // 문단 해시(uid#i) + 레거시 해시(uid) → candidate. uid는 컬렉션 내에서만 유일하므로 로어북 스코프로 키 구성
     const byKey = new Map();
+    let itemCount = 0;
     for (const c of candidates) {
-        byKey.set(`${c.lorebookName}:${getStringHash(String(c.uid))}`, c);
+        const hashes = getEntryHashes(c.uid, c.content);
+        itemCount += hashes.length - 1;
+        for (const h of hashes) byKey.set(`${c.lorebookName}:${h}`, c);
     }
+    // 문단 아이템이 엔트리보다 많으므로, 엔트리 topK개가 남도록 요청량을 평균 문단 수만큼 늘린다
+    const itemTopK = topK * Math.max(1, Math.ceil(itemCount / Math.max(1, candidates.length)));
 
     // collectionId → 로어북 이름 (응답이 collectionId로 그룹지어 오므로 되돌려야 함)
     const idToLb = new Map(lorebooks.map(lb => [getCollectionId(lb), lb]));
@@ -708,18 +783,23 @@ async function _vectorRanks(candidates, queryText, settings, lorebooks) {
     // 컬렉션마다 /query를 부르면 검색 텍스트를 매번 다시 임베딩한다 → 로어북 수만큼 느려짐.
     // query-multi는 임베딩 1회 + 컬렉션을 가로질러 전역 정렬 후 topK 컷.
     const runQuery = async (th) => {
-        const grouped = await queryMultipleCollections([...idToLb.keys()], queryText, topK, th);
+        const grouped = await queryMultipleCollections([...idToLb.keys()], queryText, itemTopK, th);
         for (const [collectionId, res] of Object.entries(grouped || {})) {
             const lbName = idToLb.get(collectionId);
             if (!lbName) continue;
             const hashes = res?.hashes || [];
             // 그룹 안의 순서는 전역 정렬 순서를 보존한다. 다만 점수를 안 주므로
             // 그룹을 가로지르는 정확한 전역 순위는 복원 불가 → 그룹 내 순위를 쓴다.
+            // 문단 아이템은 엔트리로 집계: 가장 먼저 나온 문단(최고 점수)이 그 엔트리의 순위.
+            const seen = new Set();
             let rank = 0;
             for (const hash of hashes) {
                 const cand = byKey.get(`${lbName}:${hash}`);
                 if (!cand) continue;   // 인덱스에만 남은 고아 해시 (삭제된 엔트리 등)
+                if (seen.has(cand.compositeKey)) continue;
+                seen.add(cand.compositeKey);
                 rank++;
+                if (rank > topK) break;
                 if (!ranks.has(cand.compositeKey) || ranks.get(cand.compositeKey) > rank) {
                     ranks.set(cand.compositeKey, rank);
                 }
@@ -822,6 +902,36 @@ function perBookLabel(entries, lorebooks) {
     return [...count.entries()].map(([lb, n]) => lt('ll.c78b1f2124a49489')`${lb}: ${n}entries`).join(' · ');
 }
 
+const CALLBACK_MIN_AGE = 40;
+const _recentCallbacks = new Map();
+
+const JEV_FULL_SCAN_LIMIT = 140;
+
+/** Large lorebooks: keyword, vector and lexical hits narrow the pool before Jev judges it. */
+async function jevShortlist(candidates, chatText, vectorText, settings, lorebooks) {
+    const kw = matchKeywordEntries(candidates, chatText);
+    const vector = await _vectorRanks(candidates, vectorText, settings, lorebooks);
+    const bm = buildCandidateRanker(candidates).search(chatText, JEV_FULL_SCAN_LIMIT);
+    const bRanks = new Map(bm.map((r, i) => [r.entry.compositeKey, i + 1]));
+    const score = c => (kw.has(c.compositeKey) ? 1 : 0)
+        + (vector.ranks.has(c.compositeKey) ? 1 / (60 + vector.ranks.get(c.compositeKey)) : 0)
+        + (bRanks.has(c.compositeKey) ? 1 / (60 + bRanks.get(c.compositeKey)) : 0);
+    return candidates.map(c => ({ c, s: score(c) })).filter(x => x.s > 0)
+        .sort((a, b) => b.s - a.s).slice(0, JEV_FULL_SCAN_LIMIT).map(x => x.c);
+}
+
+/** One old event that fits the current scene by meaning, rotated so the same moment is not resurfaced every turn. */
+function pickCallback(ordered, fits, chatLength) {
+    const chatId = operationContext().chatId;
+    if (!chatId || !Number.isFinite(chatLength)) return null;
+    const recent = _recentCallbacks.get(chatId) || [];
+    // Entries organized before source tracking carry no evidence and are old by definition.
+    const old = e => !e.lastEvidence || e.lastEvidence.chatId !== chatId || chatLength - e.lastEvidence.index >= CALLBACK_MIN_AGE;
+    const pick = ordered.find(e => e.category === 'event' && fits.has(e.compositeKey) && old(e) && !recent.includes(e.compositeKey));
+    if (pick) _recentCallbacks.set(chatId, [...recent, pick.compositeKey].slice(-3));
+    return pick || null;
+}
+
 async function _selectFast(candidates, queries, settings, lorebooks, engine) {
     const maxK = Math.max(1, settings.vectorSelectMaxK || 12);
     const kwHits = settings.keywordMatchEnabled !== false ? matchKeywordEntries(candidates, queries.bm25) : new Set();
@@ -832,7 +942,15 @@ async function _selectFast(candidates, queries, settings, lorebooks, engine) {
         vectorRanks: vector.ranks, bm25Results: ranked, keywordHits: kwHits, text: queries.bm25, recentText: queries.vector, settings,
         vectorUnavailable: engine === 'bm25' || vector.note === 'source-changed' || vector.note === l('ll.3d0e5f431231d01a', "query failed") || vector.note === 'stale-index',
     });
-    return { entries: ordered.slice(0, maxK), fromCache: false,
+    const entries = ordered.slice(0, maxK);
+    const callback = pickCallback(ordered, vector.ranks, queries.chatLength);
+    if (callback) {
+        const at = entries.findIndex(e => e.compositeKey === callback.compositeKey);
+        const marked = { ...callback, callback: true, reason: l('ll.callback.reason', "Past moment worth recalling") };
+        if (at >= 0) entries[at] = marked;
+        else entries[entries.length < maxK ? entries.length : maxK - 1] = marked;
+    }
+    return { entries, fromCache: false,
         stage: engine + (vector.note ? ' · ' + vector.note : '') + l('ll.f79f71bee744e930', " · character/continuity priority") };
 }
 
@@ -850,7 +968,7 @@ function lorebookFingerprint(data, embedderSig) {
         count++;
         acc = (acc * 31 + getStringHash(`${uid}:${entry.comment || ''}:${entry.content || ''}`)) | 0;
     }
-    return `${embedderSig}|${count}|${acc}`;
+    return `${embedderSig}|${VECTOR_INDEX_SCHEME}|${count}|${acc}`;
 }
 
 /**
@@ -935,7 +1053,8 @@ export async function reindexManagedLorebooks() {
 export async function autoReindexStaleLorebooks() {
     const settings = getSettings();
     if (!settings.summarySelectionEnabled) return null;
-    if ((settings.selectionEngine || 'hybrid') !== 'hybrid') return null; // 벡터 쓰는 엔진만
+    const engine = settings.selectionEngine || 'hybrid';
+    if (engine !== 'hybrid' && engine !== 'jev') return null; // 벡터 쓰는 엔진만 (jev는 shortlist에서 사용)
 
     const signature = getVectorSourceSignature();
     const map = (settings.vectorIndexByLorebook && typeof settings.vectorIndexByLorebook === 'object')

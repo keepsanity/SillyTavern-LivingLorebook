@@ -5,7 +5,7 @@ import { l, lt } from './i18n.js';
  * 패널 갱신은 ui-shared의 refreshPanel 레지스트리로 (ui-panel과 순환 의존 회피).
  */
 
-import { characters, this_chid } from '../../../../script.js';
+import { characters, this_chid, chat_metadata, saveMetadata } from '../../../../script.js';
 import { createNewWorldInfo } from '../../../world-info.js';
 import { refreshPanel, getCharacterContext, populateLorebookDropdown } from './ui-shared.js';
 import { getSettings, isOperationCurrent } from './lore-store.js';
@@ -13,6 +13,7 @@ import { finishOrganize } from './organize-followup.js';
 import { reviewMemories } from './ui-review.js';
 import { undoLastMemory } from './memory-history.js';
 import { clearSelectionCache } from './summary-retrieval.js';
+import { generateDirection, isDirectorRunning, setDirectorRunning } from './director.js';
 import { organize, compress, generateStoryArc, backfillSummaries } from './memory-manager.js';
 import { generateWorld, reorganizeExisting } from './world-builder.js';
 import { setChatLorebook } from './chat-meta.js';
@@ -65,6 +66,10 @@ export async function handleToolbarAction(action) {
 
         case 'arc':
             await handleGenerateArc();
+            return;
+
+        case 'direction':
+            await handleDirection();
             return;
 
         case 'reorganize':
@@ -248,6 +253,7 @@ async function runOrganize(options = {}) {
         await refreshPanel();
     } catch (err) {
         console.error(`${LOG_PREFIX} Organize failed:`, err);
+        try { chat_metadata.ll_last_error = { ...(chat_metadata.ll_last_error || {}), at: new Date().toISOString(), message: String(err?.message || err), stack: String(err?.stack || '').slice(0, 1500) }; saveMetadata(); } catch (e) { console.warn(`${LOG_PREFIX} could not save error diag`, e); }
         toastr.error(err.message || l('ll.039801dcf3a0738b', "Memory organization failed."));
     } finally {
         setToolbarProcessing(false);
@@ -301,6 +307,33 @@ async function handleGenerateArc() {
         console.error(`${LOG_PREFIX} Story Arc generation failed:`, err);
         toastr.error(err.message || l('ll.9d318cf2e987ae7d', "Story arc generation failed."));
     } finally {
+        setToolbarProcessing(false);
+    }
+}
+
+async function handleDirection() {
+    const settings = getSettings();
+    if (!settings.targetLorebook) {
+        toastr.warning(l('ll.1c7e28934a4ba644', "Select a target lorebook first."));
+        return;
+    }
+    if (isDirectorRunning()) {
+        toastr.info(l('ll.director.busy', "The director's note is already being written."));
+        return;
+    }
+
+    setToolbarProcessing(true, 'direction');
+    setDirectorRunning(true);
+    try {
+        await generateDirection();
+        toastr.success(l('ll.director.done', "🎬 Director's note refreshed. It stays hidden; open the Director's Note filter to peek."));
+        clearSelectionCache();
+        await refreshPanel();
+    } catch (err) {
+        console.error(`${LOG_PREFIX} Director's note failed:`, err);
+        toastr.error(err.message || l('ll.director.fail', "Could not write the director's note."));
+    } finally {
+        setDirectorRunning(false);
         setToolbarProcessing(false);
     }
 }

@@ -8,12 +8,13 @@ import { l, lt } from './i18n.js';
 
 import { characters, this_chid } from '../../../../script.js';
 import { world_names, createNewWorldInfo } from '../../../world-info.js';
-import { CATEGORIES, escapeHtml, escapeAttr, registerRefreshPanel, populateLorebookDropdown } from './ui-shared.js';
+import { CATEGORIES, escapeHtml, escapeAttr, registerRefreshPanel, populateLorebookDropdown, getViewLorebook, setViewLorebook, isViewingSideLorebook } from './ui-shared.js';
 import {
-    getSettings, loadTargetLorebook, getMetadata, CATEGORY_TAGS,
+    getSettings, loadTargetLorebook, loadAnyLorebook, getMetadata, CATEGORY_TAGS,
     calculateSelectionStorage, getEffectiveSelectionLorebooks, operationContext,
 } from './lore-store.js';
 import { getLastInjectionStats, getSelectionTrace } from './summary-retrieval.js';
+import { jevErrorMessage } from './jev-ui.js';
 import { refreshVectorStatus } from './ui-settings.js';
 import { setChatLorebook } from './chat-meta.js';
 import { PANEL_HTML } from './ui-panel-template.js';
@@ -27,6 +28,10 @@ const LOG_PREFIX = '[LivingLorebook]';
 // 패널 뷰 상태
 let currentView = 'timeline'; // 'timeline' | 'settings'
 let activeFilter = 'all';
+const BOOK_BAR_COLLAPSED_KEY = 'll_book_bar_collapsed';
+let bookBarCollapsed = true;
+try { bookBarCollapsed = localStorage.getItem(BOOK_BAR_COLLAPSED_KEY) !== '0'; } catch { /* 비보안 컨텍스트 등 */ }
+let lastBooks = [];
 
 // ============================================================
 // Panel
@@ -43,6 +48,25 @@ export function createPanel() {
     const panel = document.createElement('div');
     panel.className = 'll-panel';
     panel.innerHTML = PANEL_HTML;
+    // 로어북 전환 칩 줄 — 템플릿이 로캘별로 통째로 번역되므로 여기서 코드로 끼워 넣는다
+    const bookBar = document.createElement('div');
+    bookBar.className = 'll-book-bar';
+    bookBar.id = 'll_book_bar';
+    bookBar.style.display = 'none';
+    const filterBar = panel.querySelector('.ll-filter-bar');
+    filterBar?.before(bookBar);
+    // 로어북 줄을 통째로 접고 펴는 버튼 — 필터 줄 맨 앞에 둔다
+    const bookToggle = document.createElement('button');
+    bookToggle.className = 'll-filter-chip ll-book-toggle';
+    bookToggle.id = 'll_book_toggle';
+    bookToggle.style.display = 'none';
+    bookToggle.innerHTML = '<i class="fa-solid fa-book"></i>';
+    bookToggle.addEventListener('click', () => {
+        bookBarCollapsed = !bookBarCollapsed;
+        try { localStorage.setItem(BOOK_BAR_COLLAPSED_KEY, bookBarCollapsed ? '1' : '0'); } catch { /* 저장 못 해도 동작엔 지장 없음 */ }
+        renderBookBar(lastBooks);
+    });
+    filterBar?.prepend(bookToggle);
     document.body.appendChild(panel);
 
     // Bind panel events
@@ -140,12 +164,14 @@ function switchView(view) {
     const timeline = document.getElementById('ll_timeline');
     const settingsView = document.getElementById('ll_settings_view');
     const filterBar = document.querySelector('.ll-filter-bar');
+    const bookBar = document.getElementById('ll_book_bar');
     const toolbar = document.querySelector('.ll-toolbar');
     const settingsBtn = document.querySelector('.ll-btn-settings i');
 
     if (view === 'settings') {
         timeline.style.display = 'none';
         filterBar.style.display = 'none';
+        if (bookBar) bookBar.style.display = 'none';
         toolbar.style.display = 'none';
         settingsView.classList.add('active');
         settingsBtn.className = 'fa-solid fa-arrow-left';
@@ -173,6 +199,48 @@ function switchView(view) {
 // ============================================================
 // Timeline Rendering
 // ============================================================
+
+/** 메인 + 사이드 로어북 칩. 사이드가 없으면 줄 자체를 숨긴다. */
+function renderBookBar(books) {
+    const bar = document.getElementById('ll_book_bar');
+    const toggle = document.getElementById('ll_book_toggle');
+    if (!bar) return;
+    lastBooks = books;
+    const target = getSettings().targetLorebook || '';
+    const sides = books.filter(n => n && n !== target);
+    if (!target || sides.length === 0) {
+        bar.style.display = 'none';
+        bar.innerHTML = '';
+        if (toggle) toggle.style.display = 'none';
+        return;
+    }
+    const current = getViewLorebook();
+    if (toggle) {
+        toggle.style.display = '';
+        toggle.setAttribute('aria-expanded', bookBarCollapsed ? 'false' : 'true');
+        toggle.classList.toggle('ll-book-toggle-open', !bookBarCollapsed);
+        // 접혀 있어도 사이드 로어북을 보는 중이면 버튼 색으로 알린다
+        toggle.classList.toggle('ll-book-toggle-side', isViewingSideLorebook());
+    }
+    if (bookBarCollapsed) {
+        bar.style.display = 'none';
+        bar.innerHTML = '';
+        return;
+    }
+    const chip = (name, isMain) => `
+        <button class="ll-filter-chip ll-book-chip${name === current ? ' active' : ''}" data-book="${escapeAttr(name)}">
+            <i class="fa-solid ${isMain ? 'fa-star' : 'fa-book'}" style="margin-right:3px;font-size:10px;"></i>${escapeHtml(name)}
+        </button>`;
+    bar.innerHTML = [target, ...sides].map(n => chip(n, n === target)).join('');
+    bar.style.display = '';
+    bar.querySelectorAll('.ll-book-chip').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (btn.dataset.book === getViewLorebook()) return;
+            setViewLorebook(btn.dataset.book);
+            renderTimeline();
+        });
+    });
+}
 
 async function renderTimeline() {
     const settings = getSettings();
@@ -230,13 +298,22 @@ async function renderTimeline() {
             }
         });
 
+        renderBookBar([]);
         return;
     }
 
+    // 사이드 로어북 칩 — 보던 로어북이 연결 해제됐으면 메인으로 복귀
+    const books = getEffectiveSelectionLorebooks();
+    if (isViewingSideLorebook() && !books.includes(getViewLorebook())) setViewLorebook('');
+    renderBookBar(books);
+    const viewName = getViewLorebook();
+    const sideView = isViewingSideLorebook();
+
     let data;
     try {
-        data = await loadTargetLorebook();
+        data = sideView ? await loadAnyLorebook(viewName) : await loadTargetLorebook();
     } catch {
+        if (sideView) { setViewLorebook(''); return renderTimeline(); }
         // 로어북이 삭제됐거나 로드 실패 → 연결 해제 후 선택 UI 표시
         setChatLorebook('');
         $('#ll_target_lorebook').val('');
@@ -244,13 +321,20 @@ async function renderTimeline() {
     }
 
     if (!data) {
+        if (sideView) { setViewLorebook(''); return renderTimeline(); }
         setChatLorebook('');
         $('#ll_target_lorebook').val('');
         return renderTimeline();
     }
 
     if (!data?.entries || Object.keys(data.entries).length === 0) {
-        container.innerHTML = lt('ll.28e283dd067c14da')`
+        container.innerHTML = sideView
+            ? lt('ll.sidebook.empty')`
+            <div class="ll-empty">
+                <i class="fa-solid fa-book"></i>
+                <span>This lorebook has no entries.</span>
+            </div>`
+            : lt('ll.28e283dd067c14da')`
             <div class="ll-empty">
                 <i class="fa-solid fa-brain"></i>
                 <span>No entries yet. "Generate World"to get started!</span>
@@ -272,7 +356,7 @@ async function renderTimeline() {
     const TAG_RE = new RegExp(`<(${Object.values(CATEGORY_TAGS).join('|')})>`);
 
     for (const [uid, entry] of Object.entries(data.entries)) {
-        const meta = getMetadata(uid, settings.targetLorebook);
+        const meta = getMetadata(uid, viewName);
         // content 태그에서 카테고리 우선 판별 (로어북 간 uid 충돌 방지)
         let category = meta?.category || 'fact';
         const content = entry.content || '';
@@ -282,7 +366,8 @@ async function renderTimeline() {
         }
         const cat = CATEGORIES[category] ? category : 'fact';
 
-        if (activeFilter !== 'all' && cat !== activeFilter) continue;
+        // 연출 노트는 스포일러라 전체 보기에서 숨기고, 자기 필터에서만 보여준다
+        if (activeFilter === 'all' ? cat === 'direction' : cat !== activeFilter) continue;
 
         grouped[cat].push({
             uid,
@@ -422,6 +507,13 @@ export function refreshInjectChip() {
         return;
     }
 
+    const jevError = getSelectionTrace().jev?.error;
+    injEl.title = jevError ? jevErrorMessage(jevError) : '';
+    if (jevError) {
+        injEl.textContent = inj.totalTokens.toLocaleString();
+        if (ratioEl) ratioEl.textContent = l('ll.jev.fallback', '(Jev unavailable: lexical fallback)');
+        return;
+    }
     if (inj.entryCount === 0) {
         injEl.textContent = '0';
         if (ratioEl) ratioEl.textContent = '';
@@ -516,6 +608,12 @@ function showInjectBreakdown() {
     const info = document.createElement('p');
     info.textContent = trace.stage + (trace.actual === null ? l('ll.e9df6d75e3068852', " · WI result pending / unknown") : l('ll.64d939e27b39879f', " · WI activated: ") + trace.actual.length + l('ll.a57ab05712bfb600', "entries")); dialog.append(info);
     const actual = new Set((trace.actual || []).map(e => e.compositeKey));
+    if (trace.jev) {
+        const p = document.createElement('p');
+        p.textContent = trace.jev.error ? jevErrorMessage(trace.jev.error)
+            : lt('ll.jev.usage')`Jev: ${trace.jev.calls} calls · ${trace.jev.inputTokens} input tokens · ${trace.jev.cost === null ? '?' : '$' + trace.jev.cost.toFixed(6)}`;
+        dialog.append(p);
+    }
     for (const e of trace.entries) {
         const p = document.createElement('p');
         p.textContent = e.title + ' · ' + e.tokens + ' tokens · ' + e.reason + (trace.actual === null ? '' : actual.has(e.compositeKey) ? l('ll.6a6200523596bf50', " · Activated") : l('ll.c2ed0dea3c3b6dfb', " · Excluded by WI")); dialog.append(p);

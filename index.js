@@ -7,7 +7,7 @@ import { l, lt } from './i18n.js';
  */
 
 import { event_types } from '../../../events.js';
-import { chat_metadata, setExtensionPrompt } from '../../../../script.js';
+import { chat_metadata, setExtensionPrompt, name2 } from '../../../../script.js';
 import { initStore, saveSettings, operationContext, isOperationCurrent, migrateLegacyMetadata } from './lore-store.js';
 import { readHistory } from './history-storage.js';
 import { initLLMService } from './llm-service.js';
@@ -16,9 +16,11 @@ import { createSuggestModal } from './ui-suggest.js';
 import { setChatLorebook, restoreChatMetadata } from './chat-meta.js';
 import { renderSelectionLorebookList, populateTargetLorebookDropdown, populateAddLorebookDropdown } from './ui-lorebooks.js';
 import { refreshVectorStatus } from './ui-settings.js';
+import { JEV_CONNECTION_SETTINGS, JEV_TYPESAFE_SETTINGS, bindJevConnection } from './jev-ui.js';
 import { createPanel, openPanel, closePanel, togglePanel, refreshPanel, updateStatusBar, refreshInjectChip } from './ui-panel.js';
 import { handleBuildWorld, handleOrganize, handleCompress } from './ui-toolbar.js';
-import { selectEntries, clearSelectionCache, autoReindexStaleLorebooks, injectManagedEntriesIntoWI, recordActivatedEntries, getSelectionTrace } from './summary-retrieval.js';
+import { maybeAutoDirect } from './director.js';
+import { selectEntries, clearSelectionCache, autoReindexStaleLorebooks, injectManagedEntriesIntoWI, restrictToLLLorebooks, recordActivatedEntries, getSelectionTrace, getOffscriptMemory } from './summary-retrieval.js';
 
 // ============================================================
 // Constants
@@ -109,6 +111,8 @@ async function loadSidebarSettings() {
     $('#extensions_settings').append(html);
 
     const container = $('.ll_settings');
+    container.find('.ll-jev-connection-slot').html(JEV_TYPESAFE_SETTINGS + JEV_CONNECTION_SETTINGS);
+    bindJevConnection(container[0], settings, saveSettings, clearSelectionCache);
 
     // 활성화
     container.find('#ll_enabled')
@@ -270,67 +274,51 @@ async function maybeAutoReindex() {
 // ============================================================
 
 // ============================================================
-// Generation Hook — Summary 기반 AI 선택 + setExtensionPrompt 주입
+// Generation Hook — Select from the finalized generation history, before WI assembly.
 // ============================================================
 
 const INJECTION_KEY = 'LivingLorebook_selection';
 
-/**
- * 매 generation 직전 호출. 활성 후보 중 AI가 고른 top-N을 prompt에 주입.
- * dryRun / skipWIAN / 토글 OFF 시 skip.
- */
-/**
- * 사전계산 — 사용자 메시지 직후 selectEntries 호출.
- * GENERATION_AFTER_COMMANDS와 inflight dedup으로 LLM 호출 1번만 발생.
- *
- * 중요: setTimeout 사용 안 함. 즉시 호출해야 selectEntries 내부의 _selectInflight가
- * 동기적으로 채워지고 곧이어 발화하는 GENERATION_AFTER_COMMANDS hook이 dedup 가능.
- * fire-and-forget — 실패해도 generation 막지 않음.
- */
-let _precomputeInflight = false;
+let _generationEpoch = 0;
+let _skipGenerationWI = false;
 
 /**
- * 이번 generation에서 켜야 할 엔트리 — GENERATION_AFTER_COMMANDS에서 계산해두고,
+ * 이번 generation에서 켜야 할 엔트리 — generation interceptor에서 계산해두고,
  * 실제 emit은 WORLDINFO_ENTRIES_LOADED에서 한다. (R1: dry-run 리셋 방어 — 아래 참고)
  * @type {Array<object>|null}
  */
 let _pendingActivation = null;
-function precomputeSelection(source) {
-    if (_precomputeInflight) return; // 중복 호출 방지
-    if (!settings.enabled || !settings.summarySelectionEnabled) return;
 
-    _precomputeInflight = true;
-    const t0 = performance.now();
-
-    // 즉시 호출 (setTimeout X) — _selectInflight 동기 set → 후속 hook dedup 가능
-    (async () => {
-        try {
-            const chat = context.chat || [];
-            const result = await selectEntries(chat);
-            const dt = (performance.now() - t0).toFixed(0);
-            console.log(`${LOG_PREFIX} Precompute (${source}) ${dt}ms: ${result.entries.length} entries (${result.stage})`);
-        } catch (err) {
-            console.warn(`${LOG_PREFIX} Precompute (${source}) failed:`, err.message);
-        } finally {
-            _precomputeInflight = false;
-        }
-    })();
+function onGenerationAfterCommands(_type, options, dryRun) {
+    if (dryRun) return;
+    _generationEpoch++;
+    _skipGenerationWI = !!options?.skipWIAN;
+    _pendingActivation = null;
+    setExtensionPrompt(INJECTION_KEY, '', 1, 4, false, 0);
 }
 
-async function onGenerationBeforeWI(type, options, dryRun) {
-    if (dryRun) return;
+// AFTER_COMMANDS runs before ST appends the user message or removes a regenerated
+// reply. The interceptor receives the actual prompt history, including swipe removal.
+/** Framing for memories the narrator should handle differently from plain background. */
+function memoryLead(e) {
+    const char = name2 || 'the character';
+    if (e.unknownToChar) return `[Narrator knowledge: ${char} has not been shown or told the details below. They may shape the narration and other characters, but ${char} must not reveal knowing them unless ${char} learns them on the page.]\n`;
+    return `[Background: an earlier moment. It is available to the story; nothing about it is due now.]\n`;
+}
+
+globalThis.livingLorebookInterceptor = async function (chat, _contextSize, _abort, _type) {
     // 이전 setExtensionPrompt 잔여가 있으면 항상 비움 (구버전 호환)
     setExtensionPrompt(INJECTION_KEY, '', 1, 4, false, 0);
 
     if (!settings.enabled) return;
     if (!settings.summarySelectionEnabled) return;
-    if (options?.skipWIAN) return;
+    if (_skipGenerationWI) return;
 
     const op = operationContext();
+    const epoch = _generationEpoch;
     const t0 = performance.now();
     _pendingActivation = null;   // 이전 턴 잔여가 이번 WI 조립에 섞이지 않게
     try {
-        const chat = context.chat || [];
         // selectEntries 자체가 managed mode 아닌 lorebook은 후보에서 제외함 — 이중주입 안전
         const result = await selectEntries(chat);
         const dt = (performance.now() - t0).toFixed(0);
@@ -348,6 +336,7 @@ async function onGenerationBeforeWI(type, options, dryRun) {
                 ...raw,
                 order: 100000 - index,
                 world: e.lorebookName,
+                ...(e.callback || e.unknownToChar ? { content: memoryLead(e) + (raw.content || '') } : {}),
                 uid: raw.uid !== undefined ? raw.uid : (Number.isFinite(Number(e.uid)) ? Number(e.uid) : e.uid),
             };
         });
@@ -355,7 +344,7 @@ async function onGenerationBeforeWI(type, options, dryRun) {
         // buffer.resetExternalEffects()로 외부 활성화를 통째로 지우는데, **dry run에서도** 지운다.
         // 다른 확장이 진짜 생성 사이에 dry-run generate를 끼우면 여기서 켜둔 게 날아간다.
         // → 활성화 루프 바로 앞(WORLDINFO_ENTRIES_LOADED)에서 emit하면 지워질 창이 없다.
-        if (!isOperationCurrent(op)) return;
+        if (epoch !== _generationEpoch || !isOperationCurrent(op) || !settings.enabled || !settings.summarySelectionEnabled) return;
         _pendingActivation = { entries: entriesToActivate, operation: op };
 
         const cacheTag = result.fromCache ? ' [CACHED]' : '';
@@ -366,7 +355,7 @@ async function onGenerationBeforeWI(type, options, dryRun) {
     } catch (err) {
         console.error(`${LOG_PREFIX} Selection injection failed:`, err);
     }
-}
+};
 
 /**
  * ST가 WI 후보 목록을 조립하는 순간(getSortedEntries 안)에 호출된다.
@@ -379,6 +368,7 @@ async function onGenerationBeforeWI(type, options, dryRun) {
  * 날아갔다. 여기는 활성화 루프 **바로 앞**(같은 getSortedEntries 안)이라 그 창이 사라진다.
  */
 async function onWorldInfoEntriesLoaded(lore) {
+    restrictToLLLorebooks(lore);
     await injectManagedEntriesIntoWI(lore);
 
     if (!_pendingActivation || !isOperationCurrent(_pendingActivation.operation) || !settings.enabled || !settings.summarySelectionEnabled) return;
@@ -393,13 +383,20 @@ async function onWorldInfoEntriesLoaded(lore) {
 
 function registerEventListeners() {
     const eventSource = context.eventSource;
+    eventSource.on('offscript:lore-request', request => {
+        if (settings.enabled && settings.summarySelectionEnabled) request.result = getOffscriptMemory(request.chatId);
+    });
     eventSource.on(event_types.WORLD_INFO_ACTIVATED, entries => { recordActivatedEntries(entries); refreshInjectChip(); });
     eventSource.on(event_types.GENERATION_ENDED, () => {
+        _generationEpoch++;
         if (getSelectionTrace().actual === null) recordActivatedEntries([]);
         _pendingActivation = null; refreshInjectChip();
     });
-    eventSource.on(event_types.GENERATION_STOPPED, () => { _pendingActivation = null; clearSelectionCache(); });
+    eventSource.on(event_types.GENERATION_STOPPED, () => { _generationEpoch++; _pendingActivation = null; clearSelectionCache(); });
     eventSource.on(event_types.WORLDINFO_UPDATED, () => { _pendingActivation = null; clearSelectionCache(); });
+    for (const event of [event_types.MESSAGE_EDITED, event_types.MESSAGE_SWIPED, event_types.MESSAGE_DELETED]) {
+        eventSource.on(event, () => { _pendingActivation = null; clearSelectionCache(); });
+    }
 
     // 채팅 변경 시 배지 업데이트 + 선택 캐시 무효화
     eventSource.on(event_types.CHAT_CHANGED, () => {
@@ -424,23 +421,18 @@ function registerEventListeners() {
         maybeAutoReindex();
     });
 
-    // Generation hook — WI 처리 전에 우리 주입 슬롯 채움 (캐시 적중이면 즉시)
+    // WI activation stays in the normal ST world-info assembly path.
     // ST가 WI 후보 목록을 만들 때, managed 로어북 엔트리를 그 목록에 끼워 넣는다.
     // (이게 없으면 ST가 LL 로어북을 아예 순회하지 않아 force-activate가 전부 무시됨)
     eventSource.on(event_types.WORLDINFO_ENTRIES_LOADED, onWorldInfoEntriesLoaded);
 
-    eventSource.on(event_types.GENERATION_AFTER_COMMANDS, onGenerationBeforeWI);
+    eventSource.on(event_types.GENERATION_AFTER_COMMANDS, onGenerationAfterCommands);
 
 
     // 메시지 수신 시 미처리 카운트 업데이트
-    // (precompute는 MESSAGE_SENT만 사용 — MESSAGE_RECEIVED는 같은 캐시 키라 중복 호출)
-    eventSource.on(event_types.MESSAGE_RECEIVED, () => {
+    eventSource.on(event_types.MESSAGE_RECEIVED, (_id, type) => {
         updateStatusBar();
-    });
-
-    // 사용자 메시지 보낸 직후 사전계산 — 이 캐시가 스와이프/리젠/다음 generation 모두 커버
-    eventSource.on(event_types.MESSAGE_SENT, () => {
-        precomputeSelection('MESSAGE_SENT');
+        if (type !== 'first_message') maybeAutoDirect(() => { clearSelectionCache(); refreshPanel(); });
     });
 
     // ESC로 패널 닫기

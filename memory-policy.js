@@ -10,6 +10,8 @@ One event is a coherent trigger/action/outcome. Do not copy its narration across
 Create a separate character/relationship entry only for distinct supported information worth consulting later.
 Use only established dates. Background lore is not an event the characters experienced.
 An event is historical evidence; an arc connects causes and consequences; a LIVE entry holds current facts.
+An event entry stays under about 1500 characters: the decisive actions, the outcome and one reaction; the rest of the scene lets go.
+An event also keeps, in one past-tense sentence tied to that moment, what the source narrated of a person's reaction or inner state right then, in plain words and at the size it had on the page: a hand left where it was, a step missed. Firsts, superlatives and what a moment meant are not recorded. Keep such reactions in events and milestones, dated; a LIVE entry states current facts and never a standing disposition.
 Never deactivate a relationship because the people broke up, reconciled, or married. Update its state.
 Preserve unaffected facts during updates. If nothing changed, do not update.
 Older scenes may enrich history but must not rewind a later established current state.
@@ -34,15 +36,52 @@ Do not create another entry for an existing LIVE subject; update its UID when a 
 Check the category/title/aliases index before adding. A matching READ ONLY subject cannot be silently updated:
 add only a distinct new event, not a competing current-state record. Repeated mentions are not new events.
 Keep distinctive recall cues (a particular object, place, wording or action) when supported by the source.
+Keep who said what. When something was settled in conversation (a bet, a plan, a promise, a condition), record each person's part as that person's: what one proposed and what the other answered or added. A condition set in someone's own words stays attributed to them.
+Record what was sent, said, written or done. Drafts that were typed and deleted, messages almost sent, and lines someone decided not to say are not events and are not recorded.
 Do not replace concrete shared experiences with generic statements such as "they spent time together".
 No summary is required for vector/hybrid retrieval. Do not produce generic thematic retrieval hints.
 `;
+
+/** Standing LIVE threads kept by every organize run: the main pair's progress and side characters' own lives. */
+export function continuityThreads(char, user, pairUid = null) {
+    const pairRule = pairUid !== null
+        ? `Keep the LIVE relationship entry [uid:${pairUid}] for ${char} and ${user} current: update it when the conversation supports a change.`
+        : `Add one LIVE relationship entry for ${char} and ${user} (category relationship, live:true, title "${char} & ${user} — Relationship").
+  It is the designated current-state record for the pair, so adding it is allowed even when READ ONLY relationship entries
+  for them exist; those stay as history and are not duplicated into it.`;
+    return `
+Ongoing threads to maintain, from source evidence only:
+- ${pairRule} It holds:
+  first, where the two of them stand right now, in three short plain sentences, each telling one strand through what was done
+  or said on the page: how they are drawn to each other (what each has done toward the other's body and attention); how far
+  each has let the other into their life (what each has changed, given or shown for the other); and what they call each other
+  and have said they are (who said which word, with its date). Each strand is told in the source's own terms by its latest
+  dated facts, the strand names stay out of the entry, and a strand nobody has moved keeps its last fact as it stands; then any plans, bets or promises between them as dated facts
+  of what each said, with no open, pending or unresolved column; then the three or four most recent on-page milestones between them (meetings,
+  touches, nicknames, promises, times one sought the other out), older ones folding into the event entries. Reactions and
+  inner states stay in the dated events, and so do exact lines of dialogue: this entry tells what was said in plain reported
+  speech, without quoting it. It carries no list of what draws ${char} to ${user} and no verdicts,
+  predictions or labels the source did not use. The whole entry stays short, around 1200 characters.
+- For a side character who appears in this conversation with something going on in their own life (work, a crush,
+  a feud, a plan, a problem), keep one LIVE entry titled "<Name> — Current Life" (category character) with those
+  still-open threads, as that person's own business; what they notice or think about ${char} and ${user} is not a thread. Add it if missing, update it if it exists. Record only what the source shows; never invent
+  offscreen developments. Skip side characters with nothing of their own going on.
+- For ${char} too, keep one LIVE entry titled "${char} — Current Life" (category character) with his own current circumstances:
+  an injury and its expected recovery, a schedule, work, money, a problem, each with dates the source gives. Events hold how
+  each came about; this entry holds where it stands now and is updated as it changes.
+- Work is recorded the way a job is, in every entry: content, brands, posts and deals as what was made, posted, signed
+  or decided, with dates. Who appears in that work or is left out of it, and how ${char} handles other women, are kept as
+  plain facts in their own place and are not set against ${user} or read as signs of what he feels about her.
+`;
+}
 
 export const ARC_POLICY = `
 Write a continuity brief for the next scene using supplied memories and recent conversation.
 For major turning points retain supported cause, change and still-relevant consequence.
 Include one-time characters if their actions still matter. Never invent narrative themes or future closure.
-End with current situation, immediate goals, unresolved promises/conflicts and relevant knowledge boundaries.
+Tell what was said in plain reported speech, keeping who said it; exact lines of dialogue stay in the dated events.
+A character's work (content, brands, posts) is told as that person's own business, never as a measure of feeling for someone.
+End with the current situation in three strands, each by its latest dated facts and without naming the strand: how they are drawn to each other, how far each has let the other into their life, and what they call each other and have said they are; then relevant knowledge boundaries. Earlier plans and promises stay in the dated timeline as what was said; there is no list of open items.
 Close resolved issues. Earlier states are history, not errors to erase or states to project onto the present.
 Condense older details to fit the requested length while preserving causes of the present situation.
 Do not count the same event twice when both recent chat and memories describe it.
@@ -50,8 +89,43 @@ Do not count the same event twice when both recent chat and memories describe it
 
 export function parseCompleteJSON(raw) {
     if (typeof raw !== 'string') throw new Error(l('ll.8b0dde7064ecd1ab', "The AI response is not a string."));
-    try { return JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); }
-    catch { throw new Error(l('ll.019c603a2a1d949b', "The AI response is incomplete. Memories and source messages are unchanged. Try a smaller range.")); }
+    const text = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    try { return JSON.parse(text); } catch { /* Accept a complete JSON value surrounded by prose. */ }
+    const values = [];
+    let start = -1;
+    let quoted = false;
+    let escaped = false;
+    const stack = [];
+    for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (start < 0) {
+            if (c !== '{' && c !== '[') continue;
+            start = i;
+            stack.push(c);
+            continue;
+        }
+        if (quoted) {
+            if (escaped) escaped = false;
+            else if (c === '\\') escaped = true;
+            else if (c === '"') quoted = false;
+            continue;
+        }
+        if (c === '"') quoted = true;
+        else if (c === '{' || c === '[') stack.push(c);
+        else if (c === '}' || c === ']') {
+            if (stack.pop() !== (c === '}' ? '{' : '[')) break;
+            if (!stack.length) {
+                try { values.push(JSON.parse(text.slice(start, i + 1))); }
+                catch { break; }
+                start = -1;
+            }
+        }
+    }
+    // Never salvage a partial object or choose between multiple proposals.
+    if (start < 0 && values.length === 1) return values[0];
+    const error = new Error(l('ll.019c603a2a1d949b', 'Could not read a complete JSON response from the AI. The response may be malformed or cut off. Memories and source messages are unchanged.'));
+    error.code = 'LL_INVALID_JSON';
+    throw error;
 }
 
 export function normalizeMemory(text) {
