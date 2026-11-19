@@ -37,6 +37,7 @@ The organizer receives existing categories, aliases, unresolved flags, and evide
 - **hybrid:** prioritizes directly named characters and relevant current relationships or unresolved commitments, then ranks semantic and lexical matches.
 - **bm25:** uses lexical retrieval and name matching without embeddings.
 - **ai:** asks a model to choose among candidates with summaries. Selecting zero entries is valid. Name-priority rules apply to the fast retrieval engines.
+- **jev:** You can't use this, at least not until I add the server plugin (wink)
 
 Older managed entries with empty native keys can still use `metadata.keywords`. Existing titles and bodies remain eligible for vector retrieval without new metadata or summaries. Add exact names to **Names / Aliases** in the entry editor. Relationship and commitment entries can use participant aliases to support direct-name retrieval.
 
